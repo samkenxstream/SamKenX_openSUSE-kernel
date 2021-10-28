@@ -109,9 +109,15 @@ struct Qdisc {
 	spinlock_t		busylock ____cacheline_aligned_in_smp;
 	spinlock_t		seqlock;
 
-	/* for NOLOCK qdisc, true if there are no enqueued skbs */
-	bool			empty;
+#ifndef __GENKSYMS__
+	union {
+		/* for NOLOCK qdisc, true if there are no enqueued skbs */
+		bool			empty;
+		struct rcu_head		rcu;
+	};
+#else
 	struct rcu_head		rcu;
+#endif
 };
 
 static inline void qdisc_refcount_inc(struct Qdisc *qdisc)
