@@ -47,7 +47,10 @@ struct qdisc_size_table {
 struct qdisc_skb_head {
 	struct sk_buff	*head;
 	struct sk_buff	*tail;
-	__u32		qlen;
+	union {
+		u32		qlen;
+		atomic_t	atomic_qlen;
+	};
 	spinlock_t	lock;
 };
 
