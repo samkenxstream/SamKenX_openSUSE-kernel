@@ -46,10 +46,7 @@ struct qdisc_size_table {
 struct qdisc_skb_head {
 	struct sk_buff	*head;
 	struct sk_buff	*tail;
-	union {
-		u32		qlen;
-		atomic_t	atomic_qlen;
-	};
+	__u32		qlen;
 	spinlock_t	lock;
 };
 
@@ -417,19 +414,27 @@ static inline void qdisc_cb_private_validate(const struct sk_buff *skb, int sz)
 	BUILD_BUG_ON(sizeof(qcb->data) < sz);
 }
 
+static inline int qdisc_qlen_cpu(const struct Qdisc *q)
+{
+	return this_cpu_ptr(q->cpu_qstats)->qlen;
+}
+
 static inline int qdisc_qlen(const struct Qdisc *q)
 {
 	return q->q.qlen;
 }
 
-static inline u32 qdisc_qlen_sum(const struct Qdisc *q)
+static inline int qdisc_qlen_sum(const struct Qdisc *q)
 {
-	u32 qlen = q->qstats.qlen;
+	__u32 qlen = q->qstats.qlen;
+	int i;
 
-	if (qdisc_is_percpu_stats(q))
-		qlen += atomic_read(&q->q.atomic_qlen);
-	else
+	if (qdisc_is_percpu_stats(q)) {
+		for_each_possible_cpu(i)
+			qlen += per_cpu_ptr(q->cpu_qstats, i)->qlen;
+	} else {
 		qlen += q->q.qlen;
+	}
 
 	return qlen;
 }
@@ -794,14 +799,14 @@ static inline void qdisc_qstats_cpu_backlog_inc(struct Qdisc *sch,
 	this_cpu_add(sch->cpu_qstats->backlog, qdisc_pkt_len(skb));
 }
 
-static inline void qdisc_qstats_atomic_qlen_inc(struct Qdisc *sch)
+static inline void qdisc_qstats_cpu_qlen_inc(struct Qdisc *sch)
 {
-	atomic_inc(&sch->q.atomic_qlen);
+	this_cpu_inc(sch->cpu_qstats->qlen);
 }
 
-static inline void qdisc_qstats_atomic_qlen_dec(struct Qdisc *sch)
+static inline void qdisc_qstats_cpu_qlen_dec(struct Qdisc *sch)
 {
-	atomic_dec(&sch->q.atomic_qlen);
+	this_cpu_dec(sch->cpu_qstats->qlen);
 }
 
 static inline void qdisc_qstats_cpu_requeues_inc(struct Qdisc *sch)
@@ -1017,7 +1022,7 @@ static inline void qdisc_update_stats_at_dequeue(struct Qdisc *sch,
 	if (qdisc_is_percpu_stats(sch)) {
 		qdisc_qstats_cpu_backlog_dec(sch, skb);
 		qdisc_bstats_cpu_update(sch, skb);
-		qdisc_qstats_atomic_qlen_dec(sch);
+		qdisc_qstats_cpu_qlen_dec(sch);
 	} else {
 		qdisc_qstats_backlog_dec(sch, skb);
 		qdisc_bstats_update(sch, skb);
@@ -1029,7 +1034,7 @@ static inline void qdisc_update_stats_at_enqueue(struct Qdisc *sch,
 						 unsigned int pkt_len)
 {
 	if (qdisc_is_percpu_stats(sch)) {
-		qdisc_qstats_atomic_qlen_inc(sch);
+		qdisc_qstats_cpu_qlen_inc(sch);
 		this_cpu_add(sch->cpu_qstats->backlog, pkt_len);
 	} else {
 		sch->qstats.backlog += pkt_len;
@@ -1046,7 +1051,7 @@ static inline struct sk_buff *qdisc_dequeue_peeked(struct Qdisc *sch)
 		skb = __skb_dequeue(&sch->gso_skb);
 		if (qdisc_is_percpu_stats(sch)) {
 			qdisc_qstats_cpu_backlog_dec(sch, skb);
-			qdisc_qstats_atomic_qlen_dec(sch);
+			qdisc_qstats_cpu_qlen_dec(sch);
 		} else {
 			qdisc_qstats_backlog_dec(sch, skb);
 			sch->q.qlen--;
