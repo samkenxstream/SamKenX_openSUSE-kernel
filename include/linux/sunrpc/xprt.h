@@ -242,7 +242,6 @@ struct rpc_xprt {
 	/*
 	 * Send stuff
 	 */
-	atomic_long_t		queuelen;
 	spinlock_t		transport_lock;	/* lock transport info */
 	spinlock_t		reserve_lock;	/* lock slot table */
 	spinlock_t		recv_lock;	/* lock receive list */
@@ -284,7 +283,14 @@ struct rpc_xprt {
 	struct dentry		*debugfs;		/* debugfs directory */
 	atomic_t		inject_disconnect;
 #endif
+#ifndef __GENKSYMS__
+	union {
+		struct rcu_head		rcu;
+		atomic_long_t		queuelen;
+	};
+#else
 	struct rcu_head		rcu;
+#endif
 };
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)
