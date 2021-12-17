@@ -21,6 +21,7 @@
 #include <xen/interface/xen.h>
 
 #include "xen-asm.h"
+#include <../entry/calling.h>
 
 .macro xen_pv_trap name
 ENTRY(xen_\name)
@@ -79,6 +80,21 @@ ENTRY(xen_iret)
 1:	jmp hypercall_iret
 ENDPATCH(xen_iret)
 RELOC(xen_iret, 1b+1)
+
+/*
+ * XEN pv doesn't use trampoline stack, PER_CPU_VAR(cpu_tss_rw + TSS_sp0) is
+ * also the kernel stack.  Reusing swapgs_restore_regs_and_return_to_usermode()
+ * in XEN pv would cause %rsp to move up to the top of the kernel stack and
+ * leave the IRET frame below %rsp, which is dangerous to be corrupted if #NMI
+ * interrupts. And swapgs_restore_regs_and_return_to_usermode() pushing the IRET
+ * frame at the same address is useless.
+ */
+ENTRY(xenpv_restore_regs_and_return_to_usermode)
+	UNWIND_HINT_REGS
+	POP_REGS
+
+	addq	$8, %rsp	/* skip regs->orig_ax */
+	jmp xen_iret
 
 ENTRY(xen_sysret64)
 	/*
