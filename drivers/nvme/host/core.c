@@ -241,8 +241,10 @@ static blk_status_t nvme_error_status(u16 status)
 		return BLK_STS_NOSPC;
 	case NVME_SC_LBA_RANGE:
 	case NVME_SC_CMD_INTERRUPTED:
-	case NVME_SC_NS_NOT_READY:
 		return BLK_STS_TARGET;
+	case NVME_SC_NS_NOT_READY:
+		return status & NVME_SC_DNR ?
+			BLK_STS_TARGET : BLK_STS_TRANSPORT;
 	case NVME_SC_BAD_ATTRIBUTES:
 	case NVME_SC_ONCS_NOT_SUPPORTED:
 	case NVME_SC_INVALID_OPCODE:
