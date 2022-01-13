@@ -29,6 +29,7 @@
 
 #include "i915_drv.h"
 #include "intel_audio.h"
+#include "intel_backlight.h"
 #include "intel_combo_phy.h"
 #include "intel_connector.h"
 #include "intel_crtc.h"
@@ -48,7 +49,6 @@
 #include "intel_hdmi.h"
 #include "intel_hotplug.h"
 #include "intel_lspcon.h"
-#include "intel_panel.h"
 #include "intel_pps.h"
 #include "intel_psr.h"
 #include "intel_snps_phy.h"
@@ -3230,7 +3230,7 @@ static void intel_ddi_update_pipe_dp(struct intel_atomic_state *state,
 	intel_dp_set_infoframes(encoder, true, crtc_state, conn_state);
 	intel_edp_drrs_update(intel_dp, crtc_state);
 
-	intel_panel_update_backlight(state, encoder, crtc_state, conn_state);
+	intel_backlight_update(state, encoder, crtc_state, conn_state);
 }
 
 void intel_ddi_update_pipe(struct intel_atomic_state *state,
