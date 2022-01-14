@@ -22,6 +22,15 @@
 
 static const char simplefb_resname[] = "BOOTFB";
 static const struct simplefb_format formats[] = SIMPLEFB_FORMATS;
+static bool enable_sysfb;
+
+static int __init do_enable_sysfb(char *str)
+{
+	enable_sysfb = true;
+
+	return 1;
+}
+__setup("enable_sysfb", do_enable_sysfb);
 
 /* try parsing screen_info into a simple-framebuffer mode struct */
 __init bool sysfb_parse_mode(const struct screen_info *si,
@@ -30,6 +39,9 @@ __init bool sysfb_parse_mode(const struct screen_info *si,
 	const struct simplefb_format *f;
 	__u8 type;
 	unsigned int i;
+
+	if (!enable_sysfb)
+		return false;
 
 	type = si->orig_video_isVGA;
 	if (type != VIDEO_TYPE_VLFB && type != VIDEO_TYPE_EFI)
@@ -113,12 +125,16 @@ __init int sysfb_create_simplefb(const struct screen_info *si,
 	sysfb_apply_efi_quirks(pd);
 
 	ret = platform_device_add_resources(pd, &res, 1);
-	if (ret)
+	if (ret) {
+		platform_device_put(pd);
 		return ret;
+	}
 
 	ret = platform_device_add_data(pd, mode, sizeof(*mode));
-	if (ret)
+	if (ret) {
+		platform_device_put(pd);
 		return ret;
+	}
 
 	return platform_device_add(pd);
 }
