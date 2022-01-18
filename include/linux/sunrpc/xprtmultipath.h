@@ -20,7 +20,17 @@ struct rpc_xprt_switch {
 
 	const struct rpc_xprt_iter_ops *xps_iter_ops;
 
+#ifndef __GENKSYMS__
+	union {
+		struct {
+			unsigned int		xps_nactive;
+			atomic_long_t		xps_queuelen;
+		};
+		struct rcu_head		xps_rcu;
+	};
+#else
 	struct rcu_head		xps_rcu;
+#endif
 };
 
 struct rpc_xprt_iter {
