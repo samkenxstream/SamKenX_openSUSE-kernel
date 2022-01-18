@@ -2376,6 +2376,11 @@ static int cgroup_procs_write_permission(struct task_struct *task,
 			iput(inode);
 		}
 	} else {
+		/*
+		 * Check permissions using the credentials from file open to
+		 * protect against inherited fd attacks, see override_creds()
+		 * in __cgroup_procs_write().
+		 */
 		const struct cred *cred = current_cred();
 		const struct cred *tcred = get_task_cred(task);
 
@@ -2404,6 +2409,7 @@ ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
 	struct task_struct *tsk;
 	struct cgroup_subsys *ss;
 	struct cgroup *cgrp;
+	const struct cred *saved_cred;
 	pid_t pid;
 	int ssid, ret;
 
@@ -2443,7 +2449,9 @@ ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
 	get_task_struct(tsk);
 	rcu_read_unlock();
 
+	saved_cred = override_creds(of->file->f_cred);
 	ret = cgroup_procs_write_permission(tsk, cgrp, of);
+	revert_creds(saved_cred);
 	if (!ret)
 		ret = cgroup_attach_task(cgrp, tsk, threadgroup);
 
