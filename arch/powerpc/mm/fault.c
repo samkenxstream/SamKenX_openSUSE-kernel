@@ -251,9 +251,7 @@ int do_page_fault(struct pt_regs *regs, unsigned long address,
 	}
 #endif
 
-	/* We restore the interrupt state now */
-	if (!arch_irq_disabled_regs(regs))
-		local_irq_enable();
+	interrupt_cond_local_irq_enable(regs);
 
 	if (faulthandler_disabled() || mm == NULL) {
 		if (!is_user) {
