@@ -158,6 +158,12 @@ struct xdp_attachment_info {
 	u32 flags;
 };
 
+static __always_inline void
+xdp_init_buff(struct xdp_buff *xdp, u32 frame_sz, struct xdp_rxq_info *rxq)
+{
+	xdp->rxq = rxq;
+}
+
 struct netdev_bpf;
 int xdp_attachment_query(struct xdp_attachment_info *info,
 			 struct netdev_bpf *bpf);
