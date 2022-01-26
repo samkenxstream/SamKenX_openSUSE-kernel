@@ -1221,7 +1221,7 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 	unsigned long flags;
 	int ewake = 0;
 
-	read_lock_irqsave(&ep->lock, flags);
+	write_lock_irqsave(&ep->lock, flags);
 
 	ep_set_busy_poll_napi_id(epi);
 
@@ -1285,7 +1285,7 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode, int sync, v
 		pwake++;
 
 out_unlock:
-	read_unlock_irqrestore(&ep->lock, flags);
+	write_unlock_irqrestore(&ep->lock, flags);
 
 	/* We have to call this outside the lock */
 	if (pwake)
