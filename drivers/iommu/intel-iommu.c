@@ -383,7 +383,7 @@ static int hw_pass_through = 1;
 struct dmar_domain {
 	int	nid;			/* node id */
 
-	unsigned	iommu_refcnt[DMAR_UNITS_SUPPORTED];
+	unsigned int	iommu_refcnt[DMAR_UNITS_SUPPORTED];
 					/* Refcount of devices per iommu */
 
 

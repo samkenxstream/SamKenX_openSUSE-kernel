@@ -999,13 +999,47 @@ out:
 }
 EXPORT_SYMBOL_GPL(rpc_bind_new_program);
 
+static struct rpc_xprt *
+rpc_task_get_xprt(struct rpc_clnt *clnt)
+{
+	struct rpc_xprt_switch *xps;
+	struct rpc_xprt *xprt= xprt_iter_get_next(&clnt->cl_xpi);
+
+	if (!xprt)
+		return NULL;
+	rcu_read_lock();
+	xps = rcu_dereference(clnt->cl_xpi.xpi_xpswitch);
+	atomic_long_inc(&xps->xps_queuelen);
+	rcu_read_unlock();
+	atomic_long_inc(&xprt->queuelen);
+
+	return xprt;
+}
+
+static void
+rpc_task_release_xprt(struct rpc_clnt *clnt, struct rpc_xprt *xprt)
+{
+	struct rpc_xprt_switch *xps;
+
+	atomic_long_dec(&xprt->queuelen);
+	rcu_read_lock();
+	xps = rcu_dereference(clnt->cl_xpi.xpi_xpswitch);
+	atomic_long_dec(&xps->xps_queuelen);
+	rcu_read_unlock();
+
+	xprt_put(xprt);
+}
+
 void rpc_task_release_transport(struct rpc_task *task)
 {
 	struct rpc_xprt *xprt = task->tk_xprt;
 
 	if (xprt) {
 		task->tk_xprt = NULL;
-		xprt_put(xprt);
+		if (task->tk_client)
+			rpc_task_release_xprt(task->tk_client, xprt);
+		else
+			xprt_put(xprt);
 	}
 }
 EXPORT_SYMBOL_GPL(rpc_task_release_transport);
@@ -1014,6 +1048,7 @@ void rpc_task_release_client(struct rpc_task *task)
 {
 	struct rpc_clnt *clnt = task->tk_client;
 
+	rpc_task_release_transport(task);
 	if (clnt != NULL) {
 		/* Remove from client task list */
 		spin_lock(&clnt->cl_lock);
@@ -1023,7 +1058,6 @@ void rpc_task_release_client(struct rpc_task *task)
 
 		rpc_release_client(clnt);
 	}
-	rpc_task_release_transport(task);
 }
 
 static struct rpc_xprt *
@@ -1046,7 +1080,7 @@ void rpc_task_set_transport(struct rpc_task *task, struct rpc_clnt *clnt)
 	if (task->tk_flags & RPC_TASK_NO_ROUND_ROBIN)
 		task->tk_xprt = rpc_task_get_first_xprt(clnt);
 	else
-		task->tk_xprt = xprt_iter_get_next(&clnt->cl_xpi);
+		task->tk_xprt = rpc_task_get_xprt(clnt);
 }
 
 static
@@ -1061,8 +1095,6 @@ void rpc_task_set_client(struct rpc_task *task, struct rpc_clnt *clnt)
 			task->tk_flags |= RPC_TASK_SOFT;
 		if (clnt->cl_noretranstimeo)
 			task->tk_flags |= RPC_TASK_NO_RETRANS_TIMEOUT;
-		if (atomic_read(&clnt->cl_swapper))
-			task->tk_flags |= RPC_TASK_SWAPPER;
 		/* Add to the client's list of all tasks */
 		spin_lock(&clnt->cl_lock);
 		list_add_tail(&task->tk_task, &clnt->cl_tasks);
@@ -1708,6 +1740,9 @@ call_refreshresult(struct rpc_task *task)
 		dprintk("RPC: %5u %s: retry refresh creds\n",
 				task->tk_pid, __func__);
 		return;
+	case -ENOMEM:
+		rpc_delay(task, HZ >> 4);
+		return;
 	}
 	dprintk("RPC: %5u %s: refresh creds failed with error %d\n",
 				task->tk_pid, __func__, status);
@@ -2245,7 +2280,8 @@ call_timeout(struct rpc_task *task)
 	}
 	if (RPC_IS_SOFT(task)) {
 		if (clnt->cl_chatty) {
-			printk(KERN_NOTICE "%s: server %s not responding, timed out\n",
+			pr_notice_ratelimited(
+				"%s: server %s not responding, timed out\n",
 				clnt->cl_program->name,
 				task->tk_xprt->servername);
 		}
@@ -2259,9 +2295,10 @@ call_timeout(struct rpc_task *task)
 	if (!(task->tk_flags & RPC_CALL_MAJORSEEN)) {
 		task->tk_flags |= RPC_CALL_MAJORSEEN;
 		if (clnt->cl_chatty) {
-			printk(KERN_NOTICE "%s: server %s not responding, still trying\n",
-			clnt->cl_program->name,
-			task->tk_xprt->servername);
+			pr_notice_ratelimited(
+				"%s: server %s not responding, still trying\n",
+				clnt->cl_program->name,
+				task->tk_xprt->servername);
 		}
 	}
 	rpc_force_rebind(clnt);
@@ -2291,7 +2328,7 @@ call_decode(struct rpc_task *task)
 
 	if (task->tk_flags & RPC_CALL_MAJORSEEN) {
 		if (clnt->cl_chatty) {
-			printk(KERN_NOTICE "%s: server %s OK\n",
+			pr_notice_ratelimited("%s: server %s OK\n",
 				clnt->cl_program->name,
 				task->tk_xprt->servername);
 		}

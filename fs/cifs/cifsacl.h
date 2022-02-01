@@ -30,6 +30,10 @@
 #define WRITE_BIT       0x2
 #define EXEC_BIT        0x1
 
+#define ACL_OWNER_MASK 0700
+#define ACL_GROUP_MASK 0070
+#define ACL_EVERYONE_MASK 0007
+
 #define UBITSHIFT	6
 #define GBITSHIFT	3
 
@@ -176,6 +180,21 @@ struct smb3_acl {
 	__le16 Sbz2; /* MBZ */
 } __packed;
 
+/*
+ * Used to store the special 'NFS SIDs' used to persist the POSIX uid and gid
+ * See See http://technet.microsoft.com/en-us/library/hh509017(v=ws.10).aspx
+ */
+struct owner_sid {
+	u8 Revision;
+	u8 NumAuth;
+	u8 Authority[6];
+	__le32 SubAuthorities[3];
+} __packed;
+
+struct owner_group_sids {
+	struct owner_sid owner;
+	struct owner_sid group;
+} __packed;
 
 /*
  * Minimum security identifier can be one for system defined Users

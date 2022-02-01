@@ -169,6 +169,10 @@ struct vhost_dev {
 	struct mutex mutex;
 	struct vhost_virtqueue **vqs;
 	int nvqs;
+#ifndef __GENKSYMS__
+	/* filling a 4-byte hole */
+	int weight;
+#endif
 	struct file *log_file;
 	struct eventfd_ctx *log_ctx;
 	struct llist_head work_list;
@@ -176,14 +180,21 @@ struct vhost_dev {
 	struct vhost_umem *umem;
 	struct vhost_umem *iotlb;
 	spinlock_t iotlb_lock;
+#ifndef __GENKSYMS__
+	/* filling a 4-byte hole */
+	int byte_weight;
+#endif
 	struct list_head read_list;
 	struct list_head pending_list;
 	wait_queue_head_t wait;
 	int iov_limit;
 };
 
+bool vhost_exceeds_weight(struct vhost_virtqueue *vq, int pkts, int total_len);
 void vhost_dev_init(struct vhost_dev *, struct vhost_virtqueue **vqs,
 		    int nvqs, int iov_limit);
+void vhost_dev_init_wt(struct vhost_dev *, struct vhost_virtqueue **vqs,
+		       int nvqs, int iov_limit, int weight, int byte_weight);
 long vhost_dev_set_owner(struct vhost_dev *dev);
 bool vhost_dev_has_owner(struct vhost_dev *dev);
 long vhost_dev_check_owner(struct vhost_dev *);

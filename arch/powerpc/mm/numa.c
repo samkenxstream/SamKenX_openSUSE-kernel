@@ -451,6 +451,41 @@ int of_drconf_to_nid_single(struct drmem_lmb *lmb)
 	return nid;
 }
 
+#ifdef CONFIG_PPC_SPLPAR
+static int vphn_get_nid(long lcpu)
+{
+	__be32 associativity[VPHN_ASSOC_BUFSIZE] = {0};
+	long rc, hwid;
+
+	/*
+	 * On a shared lpar, device tree will not have node associativity.
+	 * At this time lppaca, or its __old_status field may not be
+	 * updated. Hence kernel cannot detect if its on a shared lpar. So
+	 * request an explicit associativity irrespective of whether the
+	 * lpar is shared or dedicated. Use the device tree property as a
+	 * fallback. cpu_to_phys_id is only valid between
+	 * smp_setup_cpu_maps() and smp_setup_pacas().
+	 */
+	if (firmware_has_feature(FW_FEATURE_VPHN)) {
+		if (cpu_to_phys_id)
+			hwid = cpu_to_phys_id[lcpu];
+		else
+			hwid = get_hard_smp_processor_id(lcpu);
+
+		rc = hcall_vphn(hwid, VPHN_FLAG_VCPU, associativity);
+		if (rc == H_SUCCESS)
+			return associativity_to_nid(associativity);
+	}
+
+	return NUMA_NO_NODE;
+}
+#else
+static int vphn_get_nid(long unused)
+{
+	return NUMA_NO_NODE;
+}
+#endif  /* CONFIG_PPC_SPLPAR */
+
 /*
  * Figure out to which domain a cpu belongs and stick it there.
  * Return the id of the domain used.
@@ -470,6 +505,10 @@ static int numa_setup_cpu(unsigned long lcpu)
 		return nid;
 	}
 
+	nid = vphn_get_nid(lcpu);
+	if (nid != NUMA_NO_NODE)
+		goto out_present;
+
 	cpu = of_get_cpu_node(lcpu, NULL);
 
 	if (!cpu) {
@@ -481,13 +520,13 @@ static int numa_setup_cpu(unsigned long lcpu)
 	}
 
 	nid = of_node_to_nid_single(cpu);
+	of_node_put(cpu);
 
 out_present:
 	if (nid < 0 || !node_possible(nid))
 		nid = first_online_node;
 
 	map_cpu_to_node(lcpu, nid);
-	of_node_put(cpu);
 out:
 	return nid;
 }
@@ -577,8 +616,9 @@ static inline int __init read_usm_ranges(const __be32 **usm)
  * Extract NUMA information from the ibm,dynamic-reconfiguration-memory
  * node.  This assumes n_mem_{addr,size}_cells have been set.
  */
-static void __init numa_setup_drmem_lmb(struct drmem_lmb *lmb,
-					const __be32 **usm)
+static int __init numa_setup_drmem_lmb(struct drmem_lmb *lmb,
+					const __be32 **usm,
+					void *data)
 {
 	unsigned int ranges, is_kexec_kdump = 0;
 	unsigned long base, size, sz;
@@ -590,7 +630,7 @@ static void __init numa_setup_drmem_lmb(struct drmem_lmb *lmb,
 	 */
 	if ((lmb->flags & DRCONF_MEM_RESERVED)
 	    || !(lmb->flags & DRCONF_MEM_ASSIGNED))
-		return;
+		return 0;
 
 	if (*usm)
 		is_kexec_kdump = 1;
@@ -602,7 +642,7 @@ static void __init numa_setup_drmem_lmb(struct drmem_lmb *lmb,
 	if (is_kexec_kdump) {
 		ranges = read_usm_ranges(usm);
 		if (!ranges) /* there are no (base, size) duple */
-			return;
+			return 0;
 	}
 
 	do {
@@ -619,6 +659,8 @@ static void __init numa_setup_drmem_lmb(struct drmem_lmb *lmb,
 		if (sz)
 			memblock_set_node(base, sz, &memblock.memory, nid);
 	} while (--ranges);
+
+	return 0;
 }
 
 static int __init parse_numa_properties(void)
@@ -720,7 +762,7 @@ new_range:
 	 */
 	memory = of_find_node_by_path("/ibm,dynamic-reconfiguration-memory");
 	if (memory) {
-		walk_drmem_lmbs(memory, numa_setup_drmem_lmb);
+		walk_drmem_lmbs(memory, NULL, numa_setup_drmem_lmb);
 		of_node_put(memory);
 	}
 
@@ -1045,21 +1087,7 @@ u64 memory_hotplug_max(void)
 
 /* Virtual Processor Home Node (VPHN) support */
 #ifdef CONFIG_PPC_SPLPAR
-
-#include "vphn.h"
-
 static int topology_inited;
-
-static long hcall_vphn(unsigned long cpu, u64 flags, __be32 *associativity)
-{
-	long rc;
-	long retbuf[PLPAR_HCALL9_BUFSIZE] = {0};
-
-	rc = plpar_hcall9(H_HOME_NODE_ASSOCIATIVITY, retbuf, flags, cpu);
-	vphn_unpack_associativity(retbuf, associativity);
-
-	return rc;
-}
 
 /*
  * Retrieve the new associativity information for a virtual processor's

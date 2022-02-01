@@ -214,6 +214,7 @@ static const struct usb_device_id id_table_combined[] = {
 	{ USB_DEVICE(FTDI_VID, FTDI_MTXORB_6_PID) },
 	{ USB_DEVICE(FTDI_VID, FTDI_R2000KU_TRUE_RNG) },
 	{ USB_DEVICE(FTDI_VID, FTDI_VARDAAN_PID) },
+	{ USB_DEVICE(FTDI_VID, FTDI_AUTO_M3_OP_COM_V2_PID) },
 	{ USB_DEVICE(MTXORB_VID, MTXORB_FTDI_RANGE_0100_PID) },
 	{ USB_DEVICE(MTXORB_VID, MTXORB_FTDI_RANGE_0101_PID) },
 	{ USB_DEVICE(MTXORB_VID, MTXORB_FTDI_RANGE_0102_PID) },
@@ -1759,7 +1760,7 @@ static DEVICE_ATTR_RW(latency_timer);
 
 /* Write an event character directly to the FTDI register.  The ASCII
    value is in the low 8 bits, with the enable bit in the 9th bit. */
-static ssize_t store_event_char(struct device *dev,
+static ssize_t event_char_store(struct device *dev,
 	struct device_attribute *attr, const char *valbuf, size_t count)
 {
 	struct usb_serial_port *port = to_usb_serial_port(dev);
@@ -1786,7 +1787,7 @@ static ssize_t store_event_char(struct device *dev,
 
 	return count;
 }
-static DEVICE_ATTR(event_char, S_IWUSR, NULL, store_event_char);
+static DEVICE_ATTR_WO(event_char);
 
 static int create_sysfs_attrs(struct usb_serial_port *port)
 {

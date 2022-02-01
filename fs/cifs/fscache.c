@@ -22,6 +22,7 @@
 #include "cifsglob.h"
 #include "cifs_debug.h"
 #include "cifs_fs_sb.h"
+#include "cifsproto.h"
 
 void cifs_fscache_get_client_cookie(struct TCP_Server_Info *server)
 {

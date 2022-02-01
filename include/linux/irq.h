@@ -201,6 +201,8 @@ struct irq_data {
  * IRQD_AFFINITY_MANAGED	- Affinity is auto-managed by the kernel
  * IRQD_IRQ_STARTED		- Startup state of the interrupt
  * IRQD_DEFAULT_TRIGGER_SET	- Expected trigger already been set
+ * IRQD_MSI_NOMASK_QUIRK	- Non-maskable MSI quirk for affinity change
+ *				  required
  */
 enum {
 	IRQD_TRIGGER_MASK		= 0xf,
@@ -220,6 +222,7 @@ enum {
 	IRQD_AFFINITY_MANAGED		= (1 << 21),
 	IRQD_IRQ_STARTED		= (1 << 22),
 	IRQD_DEFAULT_TRIGGER_SET	= (1 << 25),
+	IRQD_MSI_NOMASK_QUIRK		= (1 << 27),
 };
 
 #define __irqd_to_state(d) ACCESS_PRIVATE((d)->common, state_use_accessors)
@@ -350,6 +353,21 @@ static inline bool irqd_is_started(struct irq_data *d)
 	return __irqd_to_state(d) & IRQD_IRQ_STARTED;
 }
 
+static inline void irqd_set_msi_nomask_quirk(struct irq_data *d)
+{
+	__irqd_to_state(d) |= IRQD_MSI_NOMASK_QUIRK;
+}
+
+static inline void irqd_clr_msi_nomask_quirk(struct irq_data *d)
+{
+	__irqd_to_state(d) &= ~IRQD_MSI_NOMASK_QUIRK;
+}
+
+static inline bool irqd_msi_nomask_quirk(struct irq_data *d)
+{
+	return __irqd_to_state(d) & IRQD_MSI_NOMASK_QUIRK;
+}
+
 #undef __irqd_to_state
 
 static inline irq_hw_number_t irqd_to_hwirq(struct irq_data *d)
@@ -459,6 +477,7 @@ struct irq_chip {
  * IRQCHIP_SKIP_SET_WAKE:	Skip chip.irq_set_wake(), for this irq chip
  * IRQCHIP_ONESHOT_SAFE:	One shot does not require mask/unmask
  * IRQCHIP_EOI_THREADED:	Chip requires eoi() on unmask in threaded mode
+ * IRQCHIP_AFFINITY_PRE_STARTUP:      Default affinity update before startup
  */
 enum {
 	IRQCHIP_SET_TYPE_MASKED		= (1 <<  0),
@@ -468,6 +487,7 @@ enum {
 	IRQCHIP_SKIP_SET_WAKE		= (1 <<  4),
 	IRQCHIP_ONESHOT_SAFE		= (1 <<  5),
 	IRQCHIP_EOI_THREADED		= (1 <<  6),
+	IRQCHIP_AFFINITY_PRE_STARTUP		= (1 << 7),
 };
 
 #include <linux/irqdesc.h>

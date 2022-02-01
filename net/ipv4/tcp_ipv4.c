@@ -1924,13 +1924,18 @@ get_head:
 	++st->offset;
 
 	sk = sk_next(sk);
+	if (unlikely(is_a_nulls(&sk->sk_nulls_node)))
+		goto next;
 get_sk:
 	sk_for_each_from(sk) {
+		if (unlikely(is_a_nulls(&sk->sk_nulls_node)))
+			break;
 		if (!net_eq(sock_net(sk), net))
 			continue;
 		if (sk->sk_family == st->family)
 			return sk;
 	}
+next:
 	spin_unlock(&ilb->lock);
 	st->offset = 0;
 	if (++st->bucket < INET_LHTABLE_SIZE)
@@ -1980,7 +1985,10 @@ static void *established_get_first(struct seq_file *seq)
 			continue;
 
 		spin_lock_bh(lock);
+retry:
 		sk_nulls_for_each(sk, node, &tcp_hashinfo.ehash[st->bucket].chain) {
+			if (unlikely(!node))
+				goto retry;
 			if (sk->sk_family != st->family ||
 			    !net_eq(sock_net(sk), net)) {
 				continue;
@@ -2005,12 +2013,17 @@ static void *established_get_next(struct seq_file *seq, void *cur)
 	++st->offset;
 
 	sk = sk_nulls_next(sk);
+	if (!&sk->sk_node)
+		goto next;
 
 	sk_nulls_for_each_from(sk, node) {
+		if (unlikely(!node))
+			break;
 		if (sk->sk_family == st->family && net_eq(sock_net(sk), net))
 			return sk;
 	}
 
+next:
 	spin_unlock_bh(inet_ehash_lockp(&tcp_hashinfo, st->bucket));
 	++st->bucket;
 	return established_get_first(seq);

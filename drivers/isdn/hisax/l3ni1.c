@@ -23,6 +23,7 @@
 #include "l3ni1.h"
 #include <linux/ctype.h>
 #include <linux/slab.h>
+#include <linux/nospec.h>
 
 extern char *HiSax_getrev(const char *revision);
 static const char *ni1_revision = "$Revision: 2.8.2.3 $";
@@ -2892,6 +2893,7 @@ ni1up(struct PStack *st, int pr, void *arg)
 	u_char *p;
 	struct sk_buff *skb = arg;
 	struct l3_process *proc;
+	int index;
 
 	switch (pr) {
 	case (DL_DATA | INDICATION):
@@ -2933,7 +2935,8 @@ ni1up(struct PStack *st, int pr, void *arg)
 		dev_kfree_skb(skb);
 		return;
 	}
-	mt = skb->data[skb->data[1] + 2];
+	index = array_index_nospec(skb->data[1] + 2, skb->len);
+	mt = skb->data[index];
 	if (st->l3.debug & L3_DEB_STATE)
 		l3_debug(st, "ni1up cr %d", cr);
 	if (cr == -2) {  /* wrong Callref */

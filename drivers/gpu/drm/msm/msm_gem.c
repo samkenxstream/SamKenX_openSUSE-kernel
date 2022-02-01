@@ -625,7 +625,6 @@ void msm_gem_purge(struct drm_gem_object *obj, enum msm_gem_lock subclass)
 
 	WARN_ON(!mutex_is_locked(&dev->struct_mutex));
 	WARN_ON(!is_purgeable(msm_obj));
-	WARN_ON(obj->import_attach);
 
 	mutex_lock_nested(&msm_obj->lock, subclass);
 
@@ -633,13 +632,14 @@ void msm_gem_purge(struct drm_gem_object *obj, enum msm_gem_lock subclass)
 
 	msm_gem_vunmap_locked(obj);
 
+	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
+
 	put_pages(obj);
 
 	put_iova_vmas(obj);
 
 	msm_obj->madv = __MSM_MADV_PURGED;
 
-	drm_vma_node_unmap(&obj->vma_node, dev->anon_inode->i_mapping);
 	drm_gem_free_mmap_offset(obj);
 
 	/* Our goal here is to return as much of the memory as

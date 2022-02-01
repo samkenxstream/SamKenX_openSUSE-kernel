@@ -40,6 +40,7 @@
 
 #define DISP_AAL_EN				0x0000
 #define DISP_AAL_SIZE				0x0030
+#define DISP_AAL_OUTPUT_SIZE			0x04d8
 
 #define DISP_GAMMA_EN				0x0000
 #define DISP_GAMMA_CFG				0x0020
@@ -119,6 +120,7 @@ static void mtk_aal_config(struct mtk_ddp_comp *comp, unsigned int w,
 			   unsigned int bpc)
 {
 	writel(w << 16 | w, comp->regs + DISP_AAL_SIZE);
+	writel(w << 16 | h, comp->regs + DISP_AAL_OUTPUT_SIZE);
 }
 
 static void mtk_aal_start(struct mtk_ddp_comp *comp)

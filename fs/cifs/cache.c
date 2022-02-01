@@ -20,6 +20,7 @@
  */
 #include "fscache.h"
 #include "cifs_debug.h"
+#include "cifsproto.h"
 
 /*
  * CIFS filesystem definition for FS-Cache
@@ -115,30 +116,6 @@ const struct fscache_cookie_def cifs_fscache_server_index_def = {
 struct cifs_fscache_super_auxdata {
 	u64	resource_id;		/* unique server resource id */
 };
-
-static char *extract_sharename(const char *treename)
-{
-	const char *src;
-	char *delim, *dst;
-	int len;
-
-	/* skip double chars at the beginning */
-	src = treename + 2;
-
-	/* share name is always preceded by '\\' now */
-	delim = strchr(src, '\\');
-	if (!delim)
-		return ERR_PTR(-EINVAL);
-	delim++;
-	len = strlen(delim);
-
-	/* caller has to free the memory */
-	dst = kstrndup(delim, len, GFP_KERNEL);
-	if (!dst)
-		return ERR_PTR(-ENOMEM);
-
-	return dst;
-}
 
 /*
  * Superblock object currently keyed by share name

@@ -195,8 +195,26 @@ static void irq_state_set_started(struct irq_desc *desc)
 	irqd_set(&desc->irq_data, IRQD_IRQ_STARTED);
 }
 
+static int __irq_startup(struct irq_desc *desc)
+{
+	struct irq_data *d = irq_desc_get_irq_data(desc);
+	int ret = 0;
+
+	irq_domain_activate_irq(d);
+	if (d->chip->irq_startup) {
+		ret = d->chip->irq_startup(d);
+		irq_state_clr_disabled(desc);
+		irq_state_clr_masked(desc);
+	} else {
+		irq_enable(desc);
+	}
+	irq_state_set_started(desc);
+	return ret;
+}
+
 int irq_startup(struct irq_desc *desc, bool resend)
 {
+	struct irq_data *d = irq_desc_get_irq_data(desc);
 	int ret = 0;
 
 	desc->depth = 0;
@@ -204,17 +222,12 @@ int irq_startup(struct irq_desc *desc, bool resend)
 	if (irqd_is_started(&desc->irq_data)) {
 		irq_enable(desc);
 	} else {
-		irq_domain_activate_irq(&desc->irq_data);
-		if (desc->irq_data.chip->irq_startup) {
-			ret = desc->irq_data.chip->irq_startup(&desc->irq_data);
-			irq_state_clr_disabled(desc);
-			irq_state_clr_masked(desc);
-		} else {
-			irq_enable(desc);
-		}
-		irq_state_set_started(desc);
+		if (d->chip->flags & IRQCHIP_AFFINITY_PRE_STARTUP)
+			irq_setup_affinity(desc);
+		ret = __irq_startup(desc);
+		if (!(d->chip->flags & IRQCHIP_AFFINITY_PRE_STARTUP))
+			irq_setup_affinity(desc);
 	}
-
 	if (resend)
 		check_irq_resend(desc);
 

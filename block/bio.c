@@ -1784,8 +1784,7 @@ static inline bool bio_remaining_done(struct bio *bio)
  *
  *   bio_endio() can be called several times on a bio that has been chained
  *   using bio_chain().  The ->bi_end_io() function will only be called the
- *   last time.  At this point the BLK_TA_COMPLETE tracing event will be
- *   generated if BIO_TRACE_COMPLETION is set.
+ *   last time.
  **/
 void bio_endio(struct bio *bio)
 {
@@ -1794,6 +1793,12 @@ again:
 		return;
 	if (!bio_integrity_endio(bio))
 		return;
+
+	if (bio->bi_disk && bio_flagged(bio, BIO_TRACE_COMPLETION)) {
+		trace_block_bio_complete(bio->bi_disk->queue, bio,
+					 blk_status_to_errno(bio->bi_status));
+		bio_clear_flag(bio, BIO_TRACE_COMPLETION);
+	}
 
 	/*
 	 * Need to have a real endio function for chained bios, otherwise
@@ -1806,12 +1811,6 @@ again:
 	if (bio->bi_end_io == bio_chain_endio) {
 		bio = __bio_chain_endio(bio);
 		goto again;
-	}
-
-	if (bio->bi_disk && bio_flagged(bio, BIO_TRACE_COMPLETION)) {
-		trace_block_bio_complete(bio->bi_disk->queue, bio,
-					 blk_status_to_errno(bio->bi_status));
-		bio_clear_flag(bio, BIO_TRACE_COMPLETION);
 	}
 
 	blk_throtl_bio_endio(bio);

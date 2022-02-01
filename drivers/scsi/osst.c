@@ -54,6 +54,7 @@ static const char * osst_version = "0.99.4";
 #include <linux/mutex.h>
 #include <linux/uaccess.h>
 #include <asm/dma.h>
+#include <linux/nospec.h>
 
 /* The driver prints some debugging information on the console if DEBUG
    is defined and non-zero. */
@@ -701,6 +702,7 @@ static int osst_verify_frame(struct osst_tape * STp, int frame_seq_number, int q
 		STps->eof = ST_FM_HIT;
 
 		i = ntohl(aux->filemark_cnt);
+		i = array_index_nospec(i, OS_FM_TAB_MAX);
 		if (STp->header_cache != NULL && i < OS_FM_TAB_MAX && (i > STp->filemark_cnt ||
 		    STp->first_frame_position - 1 != ntohl(STp->header_cache->dat_fm_tab.fm_tab_ent[i]))) {
 #if DEBUG

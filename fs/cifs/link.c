@@ -30,6 +30,7 @@
 #include "cifs_fs_sb.h"
 #include "cifs_unicode.h"
 #include "smb2proto.h"
+#include "cifs_ioctl.h"
 
 /*
  * M-F Symlink Functions - Begin
@@ -510,13 +511,16 @@ cifs_hardlink(struct dentry *old_file, struct inode *inode,
 {
 	int rc = -EACCES;
 	unsigned int xid;
-	char *from_name = NULL;
-	char *to_name = NULL;
+	const char *from_name = NULL;
+	const char *to_name = NULL;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct tcon_link *tlink;
 	struct cifs_tcon *tcon;
 	struct TCP_Server_Info *server;
 	struct cifsInodeInfo *cifsInode;
+
+	if (unlikely(cifs_forced_shutdown(cifs_sb)))
+		return -EIO;
 
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
@@ -600,7 +604,7 @@ cifs_get_link(struct dentry *direntry, struct inode *inode,
 {
 	int rc = -ENOMEM;
 	unsigned int xid;
-	char *full_path = NULL;
+	const char *full_path = NULL;
 	char *target_path = NULL;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct tcon_link *tlink = NULL;
@@ -668,7 +672,7 @@ cifs_symlink(struct inode *inode, struct dentry *direntry, const char *symname)
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct tcon_link *tlink;
 	struct cifs_tcon *pTcon;
-	char *full_path = NULL;
+	const char *full_path = NULL;
 	struct inode *newinode = NULL;
 
 	xid = get_xid();

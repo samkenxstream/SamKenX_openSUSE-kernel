@@ -30,6 +30,7 @@
 
 #include "hysdn_defs.h"
 #include <linux/kernelcapi.h>
+#include <linux/nospec.h>
 
 static char hycapi_revision[] = "$Revision: 1.8.6.4 $";
 
@@ -54,6 +55,7 @@ static inline int _hycapi_appCheck(int app_id, int ctrl_no)
 		printk(KERN_ERR "HYCAPI: Invalid request app_id %d for controller %d", app_id, ctrl_no);
 		return -1;
 	}
+	app_id = array_index_nospec(app_id, CAPI_MAXAPPL);
 	return ((hycapi_applications[app_id - 1].ctrl_mask & (1 << (ctrl_no-1))) != 0);
 }
 
@@ -370,20 +372,21 @@ firmware-releases that do not check the MsgLen-Indication!
 
 static u16 hycapi_send_message(struct capi_ctr *ctrl, struct sk_buff *skb)
 {
-	__u16 appl_id;
+	__u16 appl_id, appl_id_safe;
 	int _len, _len2;
 	__u8 msghead[64];
 	hycapictrl_info *cinfo = ctrl->driverdata;
 	u16 retval = CAPI_NOERROR;
 
 	appl_id = CAPIMSG_APPID(skb->data);
+	appl_id_safe = array_index_nospec(appl_id, CAPI_MAXAPPL + 1);
 	switch (_hycapi_appCheck(appl_id, ctrl->cnr))
 	{
 	case 0:
 /*			printk(KERN_INFO "Need to register\n"); */
 		hycapi_register_internal(ctrl,
 					 appl_id,
-					 &(hycapi_applications[appl_id - 1].rp));
+					 &(hycapi_applications[appl_id_safe - 1].rp));
 		break;
 	case 1:
 		break;
@@ -392,6 +395,8 @@ static u16 hycapi_send_message(struct capi_ctr *ctrl, struct sk_buff *skb)
 		retval = CAPI_ILLAPPNR;
 		goto out;
 	}
+
+	appl_id = appl_id_safe;
 	switch (CAPIMSG_CMD(skb->data)) {
 	case CAPI_DISCONNECT_B3_RESP:
 		capilib_free_ncci(&cinfo->ncci_head, appl_id,

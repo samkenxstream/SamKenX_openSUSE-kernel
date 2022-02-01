@@ -1464,6 +1464,7 @@ struct ib_srq *bnxt_re_create_srq(struct ib_pd *ib_pd,
 	if (nq)
 		nq->budget++;
 	atomic_inc(&rdev->srq_count);
+	spin_lock_init(&srq->lock);
 
 	return &srq->ib_srq;
 

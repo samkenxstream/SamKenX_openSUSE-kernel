@@ -170,6 +170,7 @@ static int __dead_end_function(struct objtool_file *file, struct symbol *func,
 		"lbug_with_loc",
 		"fortify_panic",
 		"rewind_stack_do_exit",
+		"cpu_bringup_and_idle",
 	};
 
 	if (func->bind == STB_WEAK)

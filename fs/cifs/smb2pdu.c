@@ -85,7 +85,7 @@ static const int smb2_req_struct_sizes[NUMBER_OF_SMB2_COMMANDS] = {
 
 int smb3_encryption_required(const struct cifs_tcon *tcon)
 {
-	if (!tcon)
+	if (!tcon || !tcon->ses)
 		return 0;
 	if ((tcon->ses->session_flags & SMB2_SESSION_FLAG_ENCRYPT_DATA) ||
 	    (tcon->share_flags & SHI1005_FLAGS_ENCRYPT_DATA))
@@ -172,7 +172,11 @@ smb2_reconnect(__le16 smb2_command, struct cifs_tcon *tcon)
 	if (tcon == NULL)
 		return 0;
 
-	if (smb2_command == SMB2_TREE_CONNECT)
+	/*
+	 * Need to also skip SMB2_IOCTL because it is used for checking nested dfs links in
+	 * cifs_tree_connect().
+	 */
+	if (smb2_command == SMB2_TREE_CONNECT || smb2_command == SMB2_IOCTL)
 		return 0;
 
 	if (tcon->tidStatus == CifsExiting) {
@@ -410,8 +414,8 @@ build_preauth_ctxt(struct smb2_preauth_neg_context *pneg_ctxt)
 	pneg_ctxt->ContextType = SMB2_PREAUTH_INTEGRITY_CAPABILITIES;
 	pneg_ctxt->DataLength = cpu_to_le16(38);
 	pneg_ctxt->HashAlgorithmCount = cpu_to_le16(1);
-	pneg_ctxt->SaltLength = cpu_to_le16(SMB311_SALT_SIZE);
-	get_random_bytes(pneg_ctxt->Salt, SMB311_SALT_SIZE);
+	pneg_ctxt->SaltLength = cpu_to_le16(SMB311_LINUX_CLIENT_SALT_SIZE);
+	get_random_bytes(pneg_ctxt->Salt, SMB311_LINUX_CLIENT_SALT_SIZE);
 	pneg_ctxt->HashAlgorithms = SMB2_PREAUTH_INTEGRITY_SHA512;
 }
 
@@ -536,6 +540,9 @@ static void decode_preauth_context(struct smb2_preauth_neg_context *ctxt)
 	/* If invalid preauth context warn but use what we requested, SHA-512 */
 	if (len < MIN_PREAUTH_CTXT_DATA_LEN) {
 		printk_once(KERN_WARNING "server sent bad preauth context\n");
+		return;
+	} else if (len < MIN_PREAUTH_CTXT_DATA_LEN + le16_to_cpu(ctxt->SaltLength)) {
+		pr_warn_once("server sent invalid SaltLength\n");
 		return;
 	}
 	if (le16_to_cpu(ctxt->HashAlgorithmCount) != 1)
@@ -895,6 +902,13 @@ SMB2_negotiate(const unsigned int xid, struct cifs_ses *ses)
 	server->capabilities = le32_to_cpu(rsp->Capabilities);
 	/* Internal types */
 	server->capabilities |= SMB2_NT_FIND | SMB2_LARGE_FILES;
+
+	/*
+	 * SMB3.0 supports only 1 cipher and doesn't have a encryption neg context
+	 * Set the cipher type manually.
+	 */
+	if (server->dialect == SMB30_PROT_ID && (server->capabilities & SMB2_GLOBAL_CAP_ENCRYPTION))
+		server->cipher_type = SMB2_ENCRYPTION_AES128_CCM;
 
 	security_blob = smb2_get_data_area_len(&blob_offset, &blob_length,
 					       (struct smb2_sync_hdr *)rsp);
@@ -1688,7 +1702,7 @@ SMB2_tcon(const unsigned int xid, struct cifs_ses *ses, const char *tree,
 	cifs_small_buf_release(req);
 	rsp = (struct smb2_tree_connect_rsp *)rsp_iov.iov_base;
 	trace_smb3_tcon(xid, tcon->tid, ses->Suid, tree, rc);
-	if (rc != 0) {
+	if ((rc != 0) || (rsp == NULL)) {
 		if (tcon) {
 			cifs_stats_fail_inc(tcon, SMB2_TREE_CONNECT_HE);
 			tcon->need_reconnect = true;
@@ -1767,7 +1781,7 @@ SMB2_tdis(const unsigned int xid, struct cifs_tcon *tcon)
 	if ((tcon->need_reconnect) || (tcon->ses->need_reconnect))
 		return 0;
 
-	close_shroot_lease(&tcon->crfid);
+	close_cached_dir_lease(&tcon->crfid);
 
 	rc = smb2_plain_req_init(SMB2_TREE_DISCONNECT, tcon, (void **) &req,
 			     &total_len);
@@ -1900,9 +1914,11 @@ smb2_parse_contexts(struct TCP_Server_Info *server,
 	unsigned int next;
 	unsigned int remaining;
 	char *name;
-	const char smb3_create_tag_posix[] = {0x93, 0xAD, 0x25, 0x50, 0x9C,
-					0xB4, 0x11, 0xE7, 0xB4, 0x23, 0x83,
-					0xDE, 0x96, 0x8B, 0xCD, 0x7C};
+	static const char smb3_create_tag_posix[] = {
+		0x93, 0xAD, 0x25, 0x50, 0x9C,
+		0xB4, 0x11, 0xE7, 0xB4, 0x23, 0x83,
+		0xDE, 0x96, 0x8B, 0xCD, 0x7C
+	};
 
 	*oplock = 0;
 	data_offset = (char *)rsp + le32_to_cpu(rsp->CreateContextsOffset);
@@ -2160,28 +2176,69 @@ add_twarp_context(struct kvec *iov, unsigned int *num_iovec, __u64 timewarp)
 	return 0;
 }
 
+/* See See http://technet.microsoft.com/en-us/library/hh509017(v=ws.10).aspx */
+static void setup_owner_group_sids(char *buf)
+{
+	struct owner_group_sids *sids = (struct owner_group_sids *)buf;
+
+	/* Populate the user ownership fields S-1-5-88-1 */
+	sids->owner.Revision = 1;
+	sids->owner.NumAuth = 3;
+	sids->owner.Authority[5] = 5;
+	sids->owner.SubAuthorities[0] = cpu_to_le32(88);
+	sids->owner.SubAuthorities[1] = cpu_to_le32(1);
+	sids->owner.SubAuthorities[2] = cpu_to_le32(current_fsuid().val);
+
+	/* Populate the group ownership fields S-1-5-88-2 */
+	sids->group.Revision = 1;
+	sids->group.NumAuth = 3;
+	sids->group.Authority[5] = 5;
+	sids->group.SubAuthorities[0] = cpu_to_le32(88);
+	sids->group.SubAuthorities[1] = cpu_to_le32(2);
+	sids->group.SubAuthorities[2] = cpu_to_le32(current_fsgid().val);
+
+	cifs_dbg(FYI, "owner S-1-5-88-1-%d, group S-1-5-88-2-%d\n", current_fsuid().val, current_fsgid().val);
+}
+
 /* See MS-SMB2 2.2.13.2.2 and MS-DTYP 2.4.6 */
 static struct crt_sd_ctxt *
-create_sd_buf(umode_t mode, unsigned int *len)
+create_sd_buf(umode_t mode, bool set_owner, unsigned int *len)
 {
 	struct crt_sd_ctxt *buf;
-	struct cifs_ace *pace;
-	unsigned int sdlen, acelen;
+	__u8 *ptr, *aclptr;
+	unsigned int acelen, acl_size, ace_count;
+	unsigned int owner_offset = 0;
+	unsigned int group_offset = 0;
+	struct smb3_acl acl;
 
-	*len = roundup(sizeof(struct crt_sd_ctxt) + sizeof(struct cifs_ace) * 2,
-			8);
+	*len = roundup(sizeof(struct crt_sd_ctxt) + (sizeof(struct cifs_ace) * 4), 8);
+
+	if (set_owner) {
+		/* sizeof(struct owner_group_sids) is already multiple of 8 so no need to round */
+		*len += sizeof(struct owner_group_sids);
+	}
+
 	buf = kzalloc(*len, GFP_KERNEL);
 	if (buf == NULL)
 		return buf;
 
-	sdlen = sizeof(struct smb3_sd) + sizeof(struct smb3_acl) +
-		 2 * sizeof(struct cifs_ace);
+	ptr = (__u8 *)&buf[1];
+	if (set_owner) {
+		/* offset fields are from beginning of security descriptor not of create context */
+		owner_offset = ptr - (__u8 *)&buf->sd;
+		buf->sd.OffsetOwner = cpu_to_le32(owner_offset);
+		group_offset = owner_offset + offsetof(struct owner_group_sids, group);
+		buf->sd.OffsetGroup = cpu_to_le32(group_offset);
 
-	buf->ccontext.DataOffset = cpu_to_le16(offsetof
-					(struct crt_sd_ctxt, sd));
-	buf->ccontext.DataLength = cpu_to_le32(sdlen);
-	buf->ccontext.NameOffset = cpu_to_le16(offsetof
-				(struct crt_sd_ctxt, Name));
+		setup_owner_group_sids(ptr);
+		ptr += sizeof(struct owner_group_sids);
+	} else {
+		buf->sd.OffsetOwner = 0;
+		buf->sd.OffsetGroup = 0;
+	}
+
+	buf->ccontext.DataOffset = cpu_to_le16(offsetof(struct crt_sd_ctxt, sd));
+	buf->ccontext.NameOffset = cpu_to_le16(offsetof(struct crt_sd_ctxt, Name));
 	buf->ccontext.NameLength = cpu_to_le16(4);
 	/* SMB2_CREATE_SD_BUFFER_TOKEN is "SecD" */
 	buf->Name[0] = 'S';
@@ -2189,6 +2246,7 @@ create_sd_buf(umode_t mode, unsigned int *len)
 	buf->Name[2] = 'c';
 	buf->Name[3] = 'D';
 	buf->sd.Revision = 1;  /* Must be one see MS-DTYP 2.4.6 */
+
 	/*
 	 * ACL is "self relative" ie ACL is stored in contiguous block of memory
 	 * and "DP" ie the DACL is present
@@ -2196,29 +2254,50 @@ create_sd_buf(umode_t mode, unsigned int *len)
 	buf->sd.Control = cpu_to_le16(ACL_CONTROL_SR | ACL_CONTROL_DP);
 
 	/* offset owner, group and Sbz1 and SACL are all zero */
-	buf->sd.OffsetDacl = cpu_to_le32(sizeof(struct smb3_sd));
-	buf->acl.AclRevision = ACL_REVISION; /* See 2.4.4.1 of MS-DTYP */
+	buf->sd.OffsetDacl = cpu_to_le32(ptr - (__u8 *)&buf->sd);
+	/* Ship the ACL for now. we will copy it into buf later. */
+	aclptr = ptr;
+	ptr += sizeof(struct smb3_acl);
 
 	/* create one ACE to hold the mode embedded in reserved special SID */
-	pace = (struct cifs_ace *)(sizeof(struct crt_sd_ctxt) + (char *)buf);
-	acelen = setup_special_mode_ACE(pace, (__u64)mode);
+	acelen = setup_special_mode_ACE((struct cifs_ace *)ptr, (__u64)mode);
+	ptr += acelen;
+	acl_size = acelen + sizeof(struct smb3_acl);
+	ace_count = 1;
+
+	if (set_owner) {
+		/* we do not need to reallocate buffer to add the two more ACEs. plenty of space */
+		acelen = setup_special_user_owner_ACE((struct cifs_ace *)ptr);
+		ptr += acelen;
+		acl_size += acelen;
+		ace_count += 1;
+	}
+
 	/* and one more ACE to allow access for authenticated users */
-	pace = (struct cifs_ace *)(acelen + (sizeof(struct crt_sd_ctxt) +
-		(char *)buf));
-	acelen += setup_authusers_ACE(pace);
-	buf->acl.AclSize = cpu_to_le16(sizeof(struct cifs_acl) + acelen);
-	buf->acl.AceCount = cpu_to_le16(2);
+	acelen = setup_authusers_ACE((struct cifs_ace *)ptr);
+	ptr += acelen;
+	acl_size += acelen;
+	ace_count += 1;
+
+	acl.AclRevision = ACL_REVISION; /* See 2.4.4.1 of MS-DTYP */
+	acl.AclSize = cpu_to_le16(acl_size);
+	acl.AceCount = cpu_to_le16(ace_count);
+	memcpy(aclptr, &acl, sizeof(struct smb3_acl));
+
+	buf->ccontext.DataLength = cpu_to_le32(ptr - (__u8 *)&buf->sd);
+	*len = roundup(ptr - (__u8 *)buf, 8);
+
 	return buf;
 }
 
 static int
-add_sd_context(struct kvec *iov, unsigned int *num_iovec, umode_t mode)
+add_sd_context(struct kvec *iov, unsigned int *num_iovec, umode_t mode, bool set_owner)
 {
 	struct smb2_create_req *req = iov[0].iov_base;
 	unsigned int num = *num_iovec;
 	unsigned int len = 0;
 
-	iov[num].iov_base = create_sd_buf(mode, &len);
+	iov[num].iov_base = create_sd_buf(mode, set_owner, &len);
 	if (iov[num].iov_base == NULL)
 		return -ENOMEM;
 	iov[num].iov_len = len;
@@ -2603,21 +2682,35 @@ SMB2_open_init(struct cifs_tcon *tcon, struct smb_rqst *rqst, __u8 *oplock,
 			return rc;
 	}
 
-	if ((oparms->disposition != FILE_OPEN) &&
-	    (oparms->cifs_sb) &&
-	    (oparms->cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID) &&
-	    (oparms->mode != ACL_NO_MODE)) {
-		if (n_iov > 2) {
-			struct create_context *ccontext =
-			    (struct create_context *)iov[n_iov-1].iov_base;
-			ccontext->Next =
-				cpu_to_le32(iov[n_iov-1].iov_len);
+	if ((oparms->disposition != FILE_OPEN) && (oparms->cifs_sb)) {
+		bool set_mode;
+		bool set_owner;
+
+		if ((oparms->cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID) &&
+		    (oparms->mode != ACL_NO_MODE))
+			set_mode = true;
+		else {
+			set_mode = false;
+			oparms->mode = ACL_NO_MODE;
 		}
 
-		cifs_dbg(FYI, "add sd with mode 0x%x\n", oparms->mode);
-		rc = add_sd_context(iov, &n_iov, oparms->mode);
-		if (rc)
-			return rc;
+		if (oparms->cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UID_FROM_ACL)
+			set_owner = true;
+		else
+			set_owner = false;
+
+		if (set_owner | set_mode) {
+			if (n_iov > 2) {
+				struct create_context *ccontext =
+				    (struct create_context *)iov[n_iov-1].iov_base;
+				ccontext->Next = cpu_to_le32(iov[n_iov-1].iov_len);
+			}
+
+			cifs_dbg(FYI, "add sd with mode 0x%x\n", oparms->mode);
+			rc = add_sd_context(iov, &n_iov, oparms->mode, set_owner);
+			if (rc)
+				return rc;
+		}
 	}
 
 	if (n_iov > 2) {
@@ -2705,7 +2798,9 @@ SMB2_open(const unsigned int xid, struct cifs_open_parms *oparms, __le16 *path,
 			tcon->need_reconnect = true;
 		}
 		goto creat_exit;
-	} else
+	} else if (rsp == NULL) /* unlikely to happen, but safer to check */
+		goto creat_exit;
+	else
 		trace_smb3_open_done(xid, rsp->PersistentFileId, tcon->tid,
 				     ses->Suid, oparms->create_options,
 				     oparms->desired_access);
@@ -2719,7 +2814,10 @@ SMB2_open(const unsigned int xid, struct cifs_open_parms *oparms, __le16 *path,
 #endif /* CIFS_DEBUG2 */
 
 	if (buf) {
-		memcpy(buf, &rsp->CreationTime, 32);
+		buf->CreationTime = rsp->CreationTime;
+		buf->LastAccessTime = rsp->LastAccessTime;
+		buf->LastWriteTime = rsp->LastWriteTime;
+		buf->ChangeTime = rsp->ChangeTime;
 		buf->AllocationSize = rsp->AllocationSize;
 		buf->EndOfFile = rsp->EndofFile;
 		buf->Attributes = rsp->FileAttributes;
@@ -2810,7 +2908,9 @@ SMB2_ioctl_init(struct cifs_tcon *tcon, struct smb_rqst *rqst,
 	 * response size smaller.
 	 */
 	req->MaxOutputResponse = cpu_to_le32(max_response_size);
-
+	req->sync_hdr.CreditCharge =
+		cpu_to_le16(DIV_ROUND_UP(max(indatalen, max_response_size),
+					 SMB2_MAX_BUFFER_SIZE));
 	if (is_fsctl)
 		req->Flags = cpu_to_le32(SMB2_0_IOCTL_IS_FSCTL);
 	else
@@ -2915,6 +3015,16 @@ SMB2_ioctl(const unsigned int xid, struct cifs_tcon *tcon, u64 persistent_fid,
 	/* check if caller wants to look at return data or just return rc */
 	if ((plen == NULL) || (out_data == NULL))
 		goto ioctl_exit;
+
+	/*
+	 * Although unlikely to be possible for rsp to be null and rc not set,
+	 * adding check below is slightly safer long term (and quiets Coverity
+	 * warning)
+	 */
+	if (rsp == NULL) {
+		rc = -EIO;
+		goto ioctl_exit;
+	}
 
 	*plen = le32_to_cpu(rsp->OutputCount);
 
@@ -3070,7 +3180,7 @@ close_exit:
 	free_rsp_buf(resp_buftype, rsp);
 
 	/* retry close in a worker thread if this one is interrupted */
-	if (rc == -EINTR) {
+	if (is_interrupt_error(rc)) {
 		int tmp_rc;
 
 		tmp_rc = smb2_handle_cancelled_close(tcon, persistent_fid,
@@ -3285,10 +3395,11 @@ int SMB2_query_info(const unsigned int xid, struct cifs_tcon *tcon,
 
 int
 SMB2_query_acl(const unsigned int xid, struct cifs_tcon *tcon,
-		u64 persistent_fid, u64 volatile_fid,
-		void **data, u32 *plen)
+	       u64 persistent_fid, u64 volatile_fid,
+	       void **data, u32 *plen, u32 extra_info)
 {
-	__u32 additional_info = OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO;
+	__u32 additional_info = OWNER_SECINFO | GROUP_SECINFO | DACL_SECINFO |
+				extra_info;
 	*plen = 0;
 
 	return query_info(xid, tcon, persistent_fid, volatile_fid,
@@ -3683,10 +3794,10 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 			 * Related requests use info from previous read request
 			 * in chain.
 			 */
-			shdr->SessionId = 0xFFFFFFFF;
+			shdr->SessionId = 0xFFFFFFFFFFFFFFFF;
 			shdr->TreeId = 0xFFFFFFFF;
-			req->PersistentFileId = 0xFFFFFFFF;
-			req->VolatileFileId = 0xFFFFFFFF;
+			req->PersistentFileId = 0xFFFFFFFFFFFFFFFF;
+			req->VolatileFileId = 0xFFFFFFFFFFFFFFFF;
 		}
 	}
 	if (remaining_bytes > io_parms->length)
@@ -3822,8 +3933,7 @@ smb2_async_readv(struct cifs_readdata *rdata)
 	if (rdata->credits.value > 0) {
 		shdr->CreditCharge = cpu_to_le16(DIV_ROUND_UP(rdata->bytes,
 						SMB2_MAX_BUFFER_SIZE));
-		shdr->CreditRequest =
-			cpu_to_le16(le16_to_cpu(shdr->CreditCharge) + 1);
+		shdr->CreditRequest = cpu_to_le16(le16_to_cpu(shdr->CreditCharge) + 8);
 
 		rc = adjust_credits(server, &rdata->credits, rdata->bytes);
 		if (rc)
@@ -4117,8 +4227,7 @@ smb2_async_writev(struct cifs_writedata *wdata,
 	if (wdata->credits.value > 0) {
 		shdr->CreditCharge = cpu_to_le16(DIV_ROUND_UP(wdata->bytes,
 						    SMB2_MAX_BUFFER_SIZE));
-		shdr->CreditRequest =
-			cpu_to_le16(le16_to_cpu(shdr->CreditCharge) + 1);
+		shdr->CreditRequest = cpu_to_le16(le16_to_cpu(shdr->CreditCharge) + 8);
 
 		rc = adjust_credits(server, &wdata->credits, wdata->bytes);
 		if (rc)
@@ -4252,7 +4361,7 @@ int posix_info_parse(const void *beg, const void *end,
 
 {
 	int total_len = 0;
-	int sid_len;
+	int owner_len, group_len;
 	int name_len;
 	const void *owner_sid;
 	const void *group_sid;
@@ -4275,17 +4384,17 @@ int posix_info_parse(const void *beg, const void *end,
 
 	/* check owner sid */
 	owner_sid = beg + total_len;
-	sid_len = posix_info_sid_size(owner_sid, end);
-	if (sid_len < 0)
+	owner_len = posix_info_sid_size(owner_sid, end);
+	if (owner_len < 0)
 		return -1;
-	total_len += sid_len;
+	total_len += owner_len;
 
 	/* check group sid */
 	group_sid = beg + total_len;
-	sid_len = posix_info_sid_size(group_sid, end);
-	if (sid_len < 0)
+	group_len = posix_info_sid_size(group_sid, end);
+	if (group_len < 0)
 		return -1;
-	total_len += sid_len;
+	total_len += group_len;
 
 	/* check name len */
 	if (beg + total_len + 4 > end)
@@ -4306,10 +4415,8 @@ int posix_info_parse(const void *beg, const void *end,
 		out->size = total_len;
 		out->name_len = name_len;
 		out->name = name;
-		memcpy(&out->owner, owner_sid,
-		       posix_info_sid_size(owner_sid, end));
-		memcpy(&out->group, group_sid,
-		       posix_info_sid_size(group_sid, end));
+		memcpy(&out->owner, owner_sid, owner_len);
+		memcpy(&out->group, group_sid, group_len);
 	}
 	return total_len;
 }

@@ -416,8 +416,24 @@ static void vhost_dev_free_iovecs(struct vhost_dev *dev)
 		vhost_vq_free_iovecs(dev->vqs[i]);
 }
 
-void vhost_dev_init(struct vhost_dev *dev,
-		    struct vhost_virtqueue **vqs, int nvqs, int iov_limit)
+bool vhost_exceeds_weight(struct vhost_virtqueue *vq,
+			  int pkts, int total_len)
+{
+	struct vhost_dev *dev = vq->dev;
+
+	if ((dev->byte_weight && total_len >= dev->byte_weight) ||
+	    (dev->weight && pkts >= dev->weight)) {
+		vhost_poll_queue(&vq->poll);
+		return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(vhost_exceeds_weight);
+
+void vhost_dev_init_wt(struct vhost_dev *dev,
+		       struct vhost_virtqueue **vqs, int nvqs,
+		       int iov_limit, int weight, int byte_weight)
 {
 	struct vhost_virtqueue *vq;
 	int i;
@@ -432,6 +448,8 @@ void vhost_dev_init(struct vhost_dev *dev,
 	dev->mm = NULL;
 	dev->worker = NULL;
 	dev->iov_limit = iov_limit;
+	dev->weight = weight;
+	dev->byte_weight = byte_weight;
 	init_llist_head(&dev->work_list);
 	init_waitqueue_head(&dev->wait);
 	INIT_LIST_HEAD(&dev->read_list);
@@ -451,6 +469,13 @@ void vhost_dev_init(struct vhost_dev *dev,
 			vhost_poll_init(&vq->poll, vq->handle_kick,
 					POLLIN, dev);
 	}
+}
+EXPORT_SYMBOL_GPL(vhost_dev_init_wt);
+
+void vhost_dev_init(struct vhost_dev *dev,
+		    struct vhost_virtqueue **vqs, int nvqs, int iov_limit)
+{
+	vhost_dev_init_wt(dev, vqs, nvqs, iov_limit, 0, 0);
 }
 EXPORT_SYMBOL_GPL(vhost_dev_init);
 

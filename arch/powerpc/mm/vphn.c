@@ -1,5 +1,5 @@
 #include <asm/byteorder.h>
-#include "vphn.h"
+#include <asm/lppaca.h>
 
 /*
  * The associativity domain numbers are returned from the hypervisor as a
@@ -21,7 +21,7 @@
  *
  * Convert to the sequence they would appear in the ibm,associativity property.
  */
-int vphn_unpack_associativity(const long *packed, __be32 *unpacked)
+static int vphn_unpack_associativity(const long *packed, __be32 *unpacked)
 {
 	__be64 be_packed[VPHN_REGISTER_COUNT];
 	int i, nr_assoc_doms = 0;
@@ -70,3 +70,19 @@ int vphn_unpack_associativity(const long *packed, __be32 *unpacked)
 
 	return nr_assoc_doms;
 }
+
+/* NOTE: This file is included by a selftest and built in userspace. */
+#ifdef __KERNEL__
+#include <asm/hvcall.h>
+
+long hcall_vphn(unsigned long cpu, u64 flags, __be32 *associativity)
+{
+	long rc;
+	long retbuf[PLPAR_HCALL9_BUFSIZE] = {0};
+
+	rc = plpar_hcall9(H_HOME_NODE_ASSOCIATIVITY, retbuf, flags, cpu);
+	vphn_unpack_associativity(retbuf, associativity);
+
+	return rc;
+}
+#endif

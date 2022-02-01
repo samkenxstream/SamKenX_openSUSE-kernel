@@ -53,6 +53,7 @@
 #include <linux/delay.h>
 #include <linux/compat.h>
 #include <linux/poll.h>
+#include <linux/nospec.h>
 
 #include <linux/io.h>
 #include <linux/uaccess.h>
@@ -1724,6 +1725,7 @@ _ctl_diag_unregister(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
 			__func__, buffer_type);
 		return -EPERM;
 	}
+	buffer_type = array_index_nospec(buffer_type, MPI2_DIAG_BUF_TYPE_COUNT);
 
 	if ((ioc->diag_buffer_status[buffer_type] &
 	    MPT3_DIAG_BUFFER_IS_REGISTERED) == 0) {
@@ -1794,6 +1796,7 @@ _ctl_diag_query(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
 			__func__, buffer_type);
 		return -EPERM;
 	}
+	buffer_type = array_index_nospec(buffer_type, MPI2_DIAG_BUF_TYPE_COUNT);
 
 	if ((ioc->diag_buffer_status[buffer_type] &
 	    MPT3_DIAG_BUFFER_IS_REGISTERED) == 0) {
@@ -1974,6 +1977,7 @@ _ctl_diag_release(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
 			__func__, buffer_type);
 		return -EPERM;
 	}
+	buffer_type = array_index_nospec(buffer_type, MPI2_DIAG_BUF_TYPE_COUNT);
 
 	if ((ioc->diag_buffer_status[buffer_type] &
 	    MPT3_DIAG_BUFFER_IS_REGISTERED) == 0) {
@@ -2058,6 +2062,7 @@ _ctl_diag_read_buffer(struct MPT3SAS_ADAPTER *ioc, void __user *arg)
 			__func__, buffer_type);
 		return -EPERM;
 	}
+	buffer_type = array_index_nospec(buffer_type, MPI2_DIAG_BUF_TYPE_COUNT);
 
 	if (karg.unique_id != ioc->unique_id[buffer_type]) {
 		ioc_err(ioc, "%s: unique_id(0x%08x) is not registered\n",

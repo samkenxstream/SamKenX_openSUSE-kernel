@@ -143,19 +143,59 @@ struct smb2_transform_hdr {
 	__u64  SessionId;
 } __packed;
 
+/* See MS-SMB2 2.2.42 */
+struct smb2_compression_transform_hdr_unchained {
+	__le32 ProtocolId;	/* 0xFC 'S' 'M' 'B' */
+	__le32 OriginalCompressedSegmentSize;
+	__le16 CompressionAlgorithm;
+	__le16 Flags;
+	__le16 Length; /* if chained it is length, else offset */
+} __packed;
+
 /* See MS-SMB2 2.2.42.1 */
-struct compression_playload_header {
-	__le16	AlgorithmId;
-	__le16	Reserved;
-	__le32	Length;
+#define SMB2_COMPRESSION_FLAG_NONE	0x0000
+#define SMB2_COMPRESSION_FLAG_CHAINDED	0x0001
+
+struct compression_payload_header {
+	__le16	CompressionAlgorithm;
+	__le16	Flags;
+	__le32	Length; /* length of compressed playload including field below if present */
+	/* __le32 OriginalPayloadSize; */ /* optional, present when LZNT1, LZ77, LZ77+Huffman */
 } __packed;
 
 /* See MS-SMB2 2.2.42.2 */
+struct smb2_compression_transform_hdr_chained {
+	__le32 ProtocolId;	/* 0xFC 'S' 'M' 'B' */
+	__le32 OriginalCompressedSegmentSize;
+	/* struct compression_payload_header[] */
+} __packed;
+
+/* See MS-SMB2 2.2.42.2.2 */
 struct compression_pattern_payload_v1 {
 	__le16	Pattern;
 	__le16	Reserved1;
 	__le16	Reserved2;
 	__le32	Repetitions;
+} __packed;
+
+/* See MS-SMB2 2.2.43 */
+struct smb2_rdma_transform {
+	__le16 RdmaDescriptorOffset;
+	__le16 RdmaDescriptorLength;
+	__le32 Channel; /* for values see channel description in smb2 read above */
+	__le16 TransformCount;
+	__le16 Reserved1;
+	__le32 Reserved2;
+} __packed;
+
+struct smb2_rdma_encryption_transform {
+	__le16	TransformType;
+	__le16	SignatureLength;
+	__le16	NonceLength;
+	__u16	Reserved;
+	__u8	Signature[]; /* variable length */
+	/* u8 Nonce[] */
+	/* followed by padding */
 } __packed;
 
 /*
@@ -232,7 +272,7 @@ struct share_redirect_error_context_rsp {
 	__le32 NotificationType;
 	__le32 ResourceNameOffset;
 	__le32 ResourceNameLength;
-	__le16 Flags;
+	__le16 Reserved;
 	__le16 TargetType;
 	__le32 IPAddrCount;
 	struct move_dst_ipaddr IpAddrMoveList[];
@@ -253,7 +293,7 @@ struct smb2_negotiate_req {
 	__le32 NegotiateContextOffset; /* SMB3.1.1 only. MBZ earlier */
 	__le16 NegotiateContextCount;  /* SMB3.1.1 only. MBZ earlier */
 	__le16 Reserved2;
-	__le16 Dialects[1]; /* One dialect (vers=) at a time for now */
+	__le16 Dialects[4]; /* BB expand this if autonegotiate > 4 dialects */
 } __packed;
 
 /* Dialects */
@@ -288,6 +328,8 @@ struct smb2_negotiate_req {
 #define SMB2_ENCRYPTION_CAPABILITIES		cpu_to_le16(2)
 #define SMB2_COMPRESSION_CAPABILITIES		cpu_to_le16(3)
 #define SMB2_NETNAME_NEGOTIATE_CONTEXT_ID	cpu_to_le16(5)
+#define SMB2_TRANSPORT_CAPABILITIES		cpu_to_le16(6)
+#define SMB2_RDMA_TRANSFORM_CAPABILITIES	cpu_to_le16(7)
 #define SMB2_POSIX_EXTENSIONS_AVAILABLE		cpu_to_le16(0x100)
 
 struct smb2_neg_context {
@@ -297,12 +339,20 @@ struct smb2_neg_context {
 	/* Followed by array of data */
 } __packed;
 
-#define SMB311_SALT_SIZE			32
+#define SMB311_LINUX_CLIENT_SALT_SIZE			32
 /* Hash Algorithm Types */
 #define SMB2_PREAUTH_INTEGRITY_SHA512	cpu_to_le16(0x0001)
 #define SMB2_PREAUTH_HASH_SIZE 64
 
-#define MIN_PREAUTH_CTXT_DATA_LEN	(SMB311_SALT_SIZE + 6)
+/*
+ * SaltLength that the server send can be zero, so the only three required
+ * fields (all __le16) end up six bytes total, so the minimum context data len
+ * in the response is six bytes which accounts for
+ *
+ *      HashAlgorithmCount, SaltLength, and 1 HashAlgorithm.
+ */
+#define MIN_PREAUTH_CTXT_DATA_LEN 6
+
 struct smb2_preauth_neg_context {
 	__le16	ContextType; /* 1 */
 	__le16	DataLength;
@@ -310,7 +360,7 @@ struct smb2_preauth_neg_context {
 	__le16	HashAlgorithmCount; /* 1 */
 	__le16	SaltLength;
 	__le16	HashAlgorithms; /* HashAlgorithms[0] since only one defined */
-	__u8	Salt[SMB311_SALT_SIZE];
+	__u8	Salt[SMB311_LINUX_CLIENT_SALT_SIZE];
 } __packed;
 
 /* Encryption Algorithms Ciphers */
@@ -333,7 +383,7 @@ struct smb2_encryption_neg_context {
 #define SMB3_COMPRESS_LZ77	cpu_to_le16(0x0002)
 #define SMB3_COMPRESS_LZ77_HUFF	cpu_to_le16(0x0003)
 /* Pattern scanning algorithm See MS-SMB2 3.1.4.4.1 */
-#define SMB3_COMPRESS_PATTERN	cpu_to_le16(0x0004)
+#define SMB3_COMPRESS_PATTERN	cpu_to_le16(0x0004) /* Pattern_V1 */
 
 /* Compression Flags */
 #define SMB2_COMPRESSION_CAPABILITIES_FLAG_NONE		cpu_to_le32(0x00000000)
@@ -342,11 +392,12 @@ struct smb2_encryption_neg_context {
 struct smb2_compression_capabilities_context {
 	__le16	ContextType; /* 3 */
 	__le16  DataLength;
-	__u32	Flags;
+	__u32	Reserved;
 	__le16	CompressionAlgorithmCount;
 	__u16	Padding;
-	__u32	Reserved1;
+	__u32	Flags;
 	__le16	CompressionAlgorithms[3];
+	__u16	Pad;  /* Some servers require pad to DataLen multiple of 8 */
 } __packed;
 
 /*
@@ -354,10 +405,29 @@ struct smb2_compression_capabilities_context {
  * Its struct simply contains NetName, an array of Unicode characters
  */
 struct smb2_netname_neg_context {
-	__le16	ContextType; /* 0x100 */
+	__le16	ContextType; /* 5 */
 	__le16	DataLength;
 	__le32	Reserved;
 	__le16	NetName[]; /* hostname of target converted to UCS-2 */
+} __packed;
+
+/*
+ * For rdma transform capabilities context see MS-SMB2 2.2.3.1.6
+ * and 2.2.4.1.5
+ */
+
+/* RDMA Transform IDs */
+#define SMB2_RDMA_TRANSFORM_NONE	0x0000
+#define SMB2_RDMA_TRANSFORM_ENCRYPTION	0x0001
+
+struct smb2_rdma_transform_capabilities_context {
+	__le16	ContextType; /* 7 */
+	__le16  DataLength;
+	__u32	Reserved;
+	__le16	TransformCount;
+	__u16	Reserved1;
+	__u32	Reserved2;
+	__le16	RDMATransformIds[1];
 } __packed;
 
 #define POSIX_CTXT_DATA_LEN	16
@@ -891,8 +961,6 @@ struct crt_sd_ctxt {
 	struct create_context ccontext;
 	__u8	Name[8];
 	struct smb3_sd sd;
-	struct smb3_acl acl;
-	/* Followed by at least 4 ACEs */
 } __packed;
 
 
@@ -925,6 +993,31 @@ struct copychunk_ioctl_rsp {
 	__le32 ChunksWritten;
 	__le32 ChunkBytesWritten;
 	__le32 TotalBytesWritten;
+} __packed;
+
+/* See MS-FSCC 2.3.29 and 2.3.30 */
+struct get_retrieval_pointer_count_req {
+	__le64 StartingVcn; /* virtual cluster number (signed) */
+} __packed;
+
+struct get_retrieval_pointer_count_rsp {
+	__le32 ExtentCount;
+} __packed;
+
+/*
+ * See MS-FSCC 2.3.33 and 2.3.34
+ * request is the same as get_retrieval_point_count_req struct above
+ */
+struct smb3_extents {
+	__le64 NextVcn;
+	__le64 Lcn; /* logical cluster number */
+} __packed;
+
+struct get_retrieval_pointers_refcount_rsp {
+	__le32 ExtentCount;
+	__u32  Reserved;
+	__le64 StartingVcn;
+	struct smb3_extents extents[];
 } __packed;
 
 struct fsctl_set_integrity_information_req {
@@ -1169,6 +1262,7 @@ struct smb2_flush_rsp {
 #define SMB2_CHANNEL_NONE	cpu_to_le32(0x00000000)
 #define SMB2_CHANNEL_RDMA_V1	cpu_to_le32(0x00000001) /* SMB3 or later */
 #define SMB2_CHANNEL_RDMA_V1_INVALIDATE cpu_to_le32(0x00000002) /* >= SMB3.02 */
+#define SMB2_CHANNEL_RDMA_TRANSFORM cpu_to_le32(0x00000003) /* >= SMB3.02, only used on write */
 
 /* SMB2 read request without RFC1001 length at the beginning */
 struct smb2_read_plain_req {
@@ -1188,6 +1282,10 @@ struct smb2_read_plain_req {
 	__u8   Buffer[1];
 } __packed;
 
+/* Read flags */
+#define SMB2_READFLAG_RESPONSE_NONE	0x00000000
+#define SMB2_READFLAG_RESPONSE_RDMA_TRANSFORM	0x00000001
+
 struct smb2_read_rsp {
 	struct smb2_sync_hdr sync_hdr;
 	__le16 StructureSize; /* Must be 17 */
@@ -1195,7 +1293,7 @@ struct smb2_read_rsp {
 	__u8   Reserved;
 	__le32 DataLength;
 	__le32 DataRemaining;
-	__u32  Reserved2;
+	__u32  Flags;
 	__u8   Buffer[1];
 } __packed;
 
@@ -1314,6 +1412,22 @@ struct smb2_echo_rsp {
 #define SMB2_REOPEN			0x10
 
 #define SMB2_QUERY_DIRECTORY_IOV_SIZE 2
+
+/*
+ * Valid FileInformation classes.
+ *
+ * Note that these are a subset of the (file) QUERY_INFO levels defined
+ * later in this file (but since QUERY_DIRECTORY uses equivalent numbers
+ * we do not redefine them here)
+ *
+ * FileDirectoryInfomation		0x01
+ * FileFullDirectoryInformation		0x02
+ * FileIdFullDirectoryInformation	0x26
+ * FileBothDirectoryInformation		0x03
+ * FileIdBothDirectoryInformation	0x25
+ * FileNamesInformation			0x0C
+ * FileIdExtdDirectoryInformation	0x3C
+ */
 
 struct smb2_query_directory_req {
 	struct smb2_sync_hdr sync_hdr;
@@ -1551,6 +1665,7 @@ struct smb3_fs_vol_info {
 #define FILEID_GLOBAL_TX_DIRECTORY_INFORMATION 50
 #define FILE_STANDARD_LINK_INFORMATION	54
 #define FILE_ID_INFORMATION		59
+#define FILE_ID_EXTD_DIRECTORY_INFORMATION 60
 
 struct smb2_file_internal_info {
 	__le64 IndexNumber;
@@ -1563,6 +1678,7 @@ struct smb2_file_rename_info { /* encoding of request for level 10 */
 	__u64  RootDirectory;  /* MBZ for network operations (why says spec?) */
 	__le32 FileNameLength;
 	char   FileName[];     /* New name to be assigned */
+	/* padding - overall struct size must be >= 24 so filename + pad >= 6 */
 } __packed; /* level 10 Set */
 
 struct smb2_file_link_info { /* encoding of request for level 11 */
@@ -1625,12 +1741,30 @@ struct smb2_file_network_open_info {
 	__le32 Reserved;
 } __packed; /* level 34 Query also similar returned in close rsp and open rsp */
 
-/* See MS-FSCC 2.4.43 */
+/* See MS-FSCC 2.4.21 */
 struct smb2_file_id_information {
 	__le64	VolumeSerialNumber;
 	__u64  PersistentFileId; /* opaque endianness */
 	__u64  VolatileFileId; /* opaque endianness */
 } __packed; /* level 59 */
+
+/* See MS-FSCC 2.4.18 */
+struct smb2_file_id_extd_directory_info {
+	__le32 NextEntryOffset;
+	__u32 FileIndex;
+	__le64 CreationTime;
+	__le64 LastAccessTime;
+	__le64 LastWriteTime;
+	__le64 ChangeTime;
+	__le64 EndOfFile;
+	__le64 AllocationSize;
+	__le32 FileAttributes;
+	__le32 FileNameLength;
+	__le32 EaSize; /* EA size */
+	__le32 ReparsePointTag; /* valid if FILE_ATTR_REPARSE_POINT set in FileAttributes */
+	__le64 UniqueId; /* inode num - le since Samba puts ino in low 32 bit */
+	char FileName[1];
+} __packed; /* level 60 */
 
 extern char smb2_padding[7];
 

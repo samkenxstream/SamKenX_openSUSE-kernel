@@ -33,6 +33,7 @@
 #include "cifs_debug.h"
 #include "cifs_fs_sb.h"
 #include "cifs_unicode.h"
+#include "cifs_ioctl.h"
 
 static void
 renew_parental_timestamps(struct dentry *direntry)
@@ -77,7 +78,7 @@ cifs_build_path_to_root(struct smb_vol *vol, struct cifs_sb_info *cifs_sb,
 }
 
 /* Note: caller must free return buffer */
-char *
+const char *
 build_path_from_dentry(struct dentry *direntry)
 {
 	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
@@ -232,7 +233,7 @@ cifs_do_create(struct inode *inode, struct dentry *direntry, unsigned int xid,
 	int desired_access;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct cifs_tcon *tcon = tlink_tcon(tlink);
-	char *full_path = NULL;
+	const char *full_path = NULL;
 	FILE_ALL_INFO *buf = NULL;
 	struct inode *newinode = NULL;
 	int disposition;
@@ -416,15 +417,16 @@ cifs_create_get_file_info:
 		if (newinode) {
 			if (server->ops->set_lease_key)
 				server->ops->set_lease_key(newinode, fid);
-			if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_DYNPERM)
-				newinode->i_mode = mode;
-			if ((*oplock & CIFS_CREATE_ACTION) &&
-			    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID)) {
-				newinode->i_uid = current_fsuid();
-				if (inode->i_mode & S_ISGID)
-					newinode->i_gid = inode->i_gid;
-				else
-					newinode->i_gid = current_fsgid();
+			if ((*oplock & CIFS_CREATE_ACTION) && S_ISREG(newinode->i_mode)) {
+				if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_DYNPERM)
+					newinode->i_mode = mode;
+				if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SET_UID) {
+					newinode->i_uid = current_fsuid();
+					if (inode->i_mode & S_ISGID)
+						newinode->i_gid = inode->i_gid;
+					else
+						newinode->i_gid = current_fsgid();
+				}
 			}
 		}
 	}
@@ -436,10 +438,11 @@ cifs_create_set_dentry:
 		goto out_err;
 	}
 
-	if (S_ISDIR(newinode->i_mode)) {
-		rc = -EISDIR;
-		goto out_err;
-	}
+	if (newinode)
+		if (S_ISDIR(newinode->i_mode)) {
+			rc = -EISDIR;
+			goto out_err;
+		}
 
 	d_drop(direntry);
 	d_add(direntry, newinode);
@@ -471,6 +474,9 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 	struct cifs_pending_open open;
 	__u32 oplock;
 	struct cifsFileInfo *file_info;
+
+	if (unlikely(cifs_forced_shutdown(CIFS_SB(inode->i_sb))))
+		return -EIO;
 
 	/*
 	 * Posix open is only called (at lookup time) for file create now. For
@@ -589,6 +595,9 @@ int cifs_create(struct inode *inode, struct dentry *direntry, umode_t mode,
 	cifs_dbg(FYI, "cifs_create parent inode = 0x%p name is: %pd and dentry = 0x%p\n",
 		 inode, direntry, direntry);
 
+	if (unlikely(cifs_forced_shutdown(CIFS_SB(inode->i_sb))))
+		return -EIO;
+
 	tlink = cifs_sb_tlink(CIFS_SB(inode->i_sb));
 	rc = PTR_ERR(tlink);
 	if (IS_ERR(tlink))
@@ -619,12 +628,15 @@ int cifs_mknod(struct inode *inode, struct dentry *direntry, umode_t mode,
 	struct cifs_sb_info *cifs_sb;
 	struct tcon_link *tlink;
 	struct cifs_tcon *tcon;
-	char *full_path = NULL;
+	const char *full_path = NULL;
 
 	if (!old_valid_dev(device_number))
 		return -EINVAL;
 
 	cifs_sb = CIFS_SB(inode->i_sb);
+	if (unlikely(cifs_forced_shutdown(cifs_sb)))
+		return -EIO;
+
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
 		return PTR_ERR(tlink);
@@ -660,7 +672,8 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	struct tcon_link *tlink;
 	struct cifs_tcon *pTcon;
 	struct inode *newInode = NULL;
-	char *full_path = NULL;
+	const char *full_path = NULL;
+	int retry_count = 0;
 
 	xid = get_xid();
 
@@ -702,6 +715,7 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	cifs_dbg(FYI, "Full path: %s inode = 0x%p\n",
 		 full_path, d_inode(direntry));
 
+again:
 	if (pTcon->unix_ext) {
 		rc = cifs_get_inode_info_unix(&newInode, full_path,
 					      parent_dir_inode->i_sb, xid);
@@ -714,6 +728,8 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		/* since paths are not looked up by component - the parent
 		   directories are presumed to be good here */
 		renew_parental_timestamps(direntry);
+	} else if (rc == -EAGAIN && retry_count++ < 10) {
+		goto again;
 	} else if (rc == -ENOENT) {
 		cifs_set_time(direntry, jiffies);
 		newInode = NULL;

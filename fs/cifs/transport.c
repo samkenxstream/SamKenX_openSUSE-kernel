@@ -339,7 +339,7 @@ __smb_send_rqst(struct TCP_Server_Info *server, int num_rqst,
 	if (ssocket == NULL)
 		return -EAGAIN;
 
-	if (signal_pending(current)) {
+	if (fatal_signal_pending(current)) {
 		cifs_dbg(FYI, "signal pending before send request\n");
 		return -ERESTARTSYS;
 	}
@@ -433,7 +433,7 @@ unmask:
 
 	if (signal_pending(current) && (total_len != send_length)) {
 		cifs_dbg(FYI, "signal is pending after attempt to send\n");
-		rc = -EINTR;
+		rc = -ERESTARTSYS;
 	}
 
 	/* uncork it */
@@ -449,7 +449,9 @@ unmask:
 		 * be taken as the remainder of this one. We need to kill the
 		 * socket so the server throws away the partial SMB
 		 */
+		spin_lock(&GlobalMid_Lock);
 		server->tcpStatus = CifsNeedReconnect;
+		spin_unlock(&GlobalMid_Lock);
 		trace_smb3_partial_send_reconnect(server->CurrentMid,
 						  server->hostname);
 	}
@@ -530,7 +532,7 @@ wait_for_free_credits(struct TCP_Server_Info *server, const int num_credits,
 		      const int timeout, const int flags,
 		      unsigned int *instance)
 {
-	int rc;
+	long rc;
 	int *credits;
 	int optype;
 	long int t;
@@ -574,7 +576,7 @@ wait_for_free_credits(struct TCP_Server_Info *server, const int num_credits,
 					server->hostname, num_credits, 0);
 				cifs_server_dbg(VFS, "wait timed out after %d ms\n",
 					 timeout);
-				return -ENOTSUPP;
+				return -EBUSY;
 			}
 			if (rc == -ERESTARTSYS)
 				return -ERESTARTSYS;
@@ -616,7 +618,7 @@ wait_for_free_credits(struct TCP_Server_Info *server, const int num_credits,
 						0);
 					cifs_server_dbg(VFS, "wait timed out after %d ms\n",
 						 timeout);
-					return -ENOTSUPP;
+					return -EBUSY;
 				}
 				if (rc == -ERESTARTSYS)
 					return -ERESTARTSYS;
@@ -694,7 +696,7 @@ wait_for_compound_request(struct TCP_Server_Info *server, int num,
 					server->hostname, scredits, sin_flight);
 			cifs_dbg(FYI, "%s: %d requests in flight, needed %d total=%d\n",
 					__func__, sin_flight, num, scredits);
-			return -ENOTSUPP;
+			return -EDEADLK;
 		}
 	}
 	spin_unlock(&server->req_lock);
@@ -972,7 +974,7 @@ cifs_check_receive(struct mid_q_entry *mid, struct TCP_Server_Info *server,
 	}
 
 	/* BB special case reconnect tid and uid here? */
-	return map_smb_to_linux_error(mid->resp_buf, log_error);
+	return map_and_check_smb_error(mid, log_error);
 }
 
 struct mid_q_entry *
@@ -1153,9 +1155,12 @@ compound_send_recv(const unsigned int xid, struct cifs_ses *ses,
 	/*
 	 * Compounding is never used during session establish.
 	 */
-	if ((ses->status == CifsNew) || (optype & CIFS_NEG_OP) || (optype & CIFS_SESS_OP))
+	if ((ses->status == CifsNew) || (optype & CIFS_NEG_OP) || (optype & CIFS_SESS_OP)) {
+		mutex_lock(&server->srv_mutex);
 		smb311_update_preauth_hash(ses, rqst[0].rq_iov,
 					   rqst[0].rq_nvec);
+		mutex_unlock(&server->srv_mutex);
+	}
 
 	for (i = 0; i < num_rqst; i++) {
 		rc = wait_for_response(server, midQ[i]);
@@ -1223,7 +1228,9 @@ compound_send_recv(const unsigned int xid, struct cifs_ses *ses,
 			.iov_base = resp_iov[0].iov_base,
 			.iov_len = resp_iov[0].iov_len
 		};
+		mutex_lock(&server->srv_mutex);
 		smb311_update_preauth_hash(ses, &iov, 1);
+		mutex_unlock(&server->srv_mutex);
 	}
 
 out:

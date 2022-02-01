@@ -1104,7 +1104,8 @@ void sctp_ulpq_renege(struct sctp_ulpq *ulpq, struct sctp_chunk *chunk,
 		}
 	}
 	/* If able to free enough room, accept this chunk. */
-	if (chunk && (freed >= needed)) {
+	if (chunk && sk_rmem_schedule(asoc->base.sk, chunk->skb, needed) &&
+	    freed >= needed) {
 		int retval;
 		retval = sctp_ulpq_tail_data(ulpq, chunk, gfp);
 		/*

@@ -886,11 +886,8 @@ void inet_diag_dump_icsk(struct inet_hashinfo *hashinfo, struct sk_buff *skb,
 			sk_for_each(sk, &ilb->head) {
 				struct inet_sock *inet = inet_sk(sk);
 
-				if (unlikely(is_a_nulls(&sk->sk_nulls_node))) {
-					pr_info("%s: bsc#1180624 race encountered\n",
-						__func__);
+				if (unlikely(is_a_nulls(&sk->sk_nulls_node)))
 					break;
-				}
 				if (!net_eq(sock_net(sk), net))
 					continue;
 
@@ -972,7 +969,7 @@ next_chunk:
 			if (!inet_diag_bc_sk(bc, sk))
 				goto next_normal;
 
-			if (!atomic_add_unless(&sk->sk_refcnt, 1, -1))
+			if (!atomic_inc_not_zero(&sk->sk_refcnt))
 				goto next_normal;
 
 			num_arr[accum] = num;

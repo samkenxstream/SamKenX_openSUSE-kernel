@@ -77,6 +77,21 @@ struct lpfc_node_rrqs {
 	unsigned long xri_bitmap[XRI_BITMAP_ULONGS];
 };
 
+enum lpfc_fc4_xpt_flags {
+	NLP_XPT_REGD		= 0x1,
+	SCSI_XPT_REGD		= 0x2,
+	NVME_XPT_REGD		= 0x4,
+	NVME_XPT_UNREG_WAIT	= 0x8,
+	NLP_XPT_HAS_HH		= 0x10
+};
+
+enum lpfc_nlp_save_flags {
+	/* devloss occurred during recovery */
+	NLP_IN_RECOV_POST_DEV_LOSS	= 0x1,
+	/* wait for outstanding LOGO to cmpl */
+	NLP_WAIT_FOR_LOGO		= 0x2,
+};
+
 struct lpfc_nodelist {
 	struct list_head nlp_listp;
 	struct serv_parm fc_sparam;		/* buffer for service params */
@@ -135,13 +150,11 @@ struct lpfc_nodelist {
 	unsigned long *active_rrqs_xri_bitmap;
 	struct lpfc_scsicmd_bkt *lat_data;	/* Latency data */
 	uint32_t fc4_prli_sent;
-	uint32_t fc4_xpt_flags;
-	uint32_t upcall_flags;
-#define NLP_WAIT_FOR_UNREG    0x1
-#define SCSI_XPT_REGD         0x2
-#define NVME_XPT_REGD         0x4
-#define NLP_WAIT_FOR_LOGO     0x2
 
+	/* flags to keep ndlp alive until special conditions are met */
+	enum lpfc_nlp_save_flags save_flags;
+
+	enum lpfc_fc4_xpt_flags fc4_xpt_flags;
 
 	uint32_t nvme_fb_size; /* NVME target's supported byte cnt */
 #define NVME_FB_BIT_SHIFT 9    /* PRLI Rsp first burst in 512B units. */

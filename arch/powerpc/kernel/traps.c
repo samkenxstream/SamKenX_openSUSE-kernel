@@ -311,14 +311,20 @@ void _exception_pkey(int signr, struct pt_regs *regs, int code,
 		return;
 	}
 
+	/*
+	 * Must not enable interrupts even for user-mode exception, because
+	 * this can be called from machine check, which may be a NMI or IRQ
+	 * which don't like interrupts being enabled. Could check for
+	 * in_hardirq || in_nmi perhaps, but there doesn't seem to be a good
+	 * reason why _exception() should enable irqs for an exception handler,
+	 * the handlers themselves do that directly.
+	 */
+
 	if (show_unhandled_signals && unhandled_signal(current, signr)) {
 		printk_ratelimited(regs->msr & MSR_64BIT ? fmt64 : fmt32,
 				   current->comm, current->pid, signr,
 				   addr, regs->nip, regs->link, code);
 	}
-
-	if (arch_irqs_disabled() && !arch_irq_disabled_regs(regs))
-		local_irq_enable();
 
 	current->thread.trap_nr = code;
 
@@ -1622,9 +1628,7 @@ void program_check_exception(struct pt_regs *regs)
 	if (!user_mode(regs))
 		goto sigill;
 
-	/* We restore the interrupt state now */
-	if (!arch_irq_disabled_regs(regs))
-		local_irq_enable();
+	interrupt_cond_local_irq_enable(regs);
 
 	/* (reason & REASON_ILLEGAL) would be the obvious thing here,
 	 * but there seems to be a hardware bug on the 405GP (RevD)
@@ -1677,9 +1681,7 @@ void alignment_exception(struct pt_regs *regs)
 	enum ctx_state prev_state = exception_enter();
 	int sig, code, fixed = 0;
 
-	/* We restore the interrupt state now */
-	if (!arch_irq_disabled_regs(regs))
-		local_irq_enable();
+	interrupt_cond_local_irq_enable(regs);
 
 	if (tm_abort_check(regs, TM_CAUSE_ALIGNMENT | TM_CAUSE_PERSISTENT))
 		goto bail;
@@ -1887,9 +1889,7 @@ void facility_unavailable_exception(struct pt_regs *regs)
 	    facility_strings[status])
 		facility = facility_strings[status];
 
-	/* We restore the interrupt state now */
-	if (!arch_irq_disabled_regs(regs))
-		local_irq_enable();
+	interrupt_cond_local_irq_enable(regs);
 
 	pr_err_ratelimited("%sFacility '%s' unavailable (%d), exception at 0x%lx, MSR=%lx\n",
 		hv ? "Hypervisor " : "", facility, status, regs->nip, regs->msr);

@@ -1820,6 +1820,7 @@ static int ext4_da_map_blocks(struct inode *inode, sector_t iblock,
 add_delayed:
 	if (retval == 0) {
 		int ret;
+		bool reserved = false;
 		/*
 		 * XXX: __block_prepare_write() unmaps passed block,
 		 * is it OK?
@@ -1837,11 +1838,14 @@ add_delayed:
 				retval = ret;
 				goto out_unlock;
 			}
+			reserved = true;
 		}
 
 		ret = ext4_es_insert_extent(inode, map->m_lblk, map->m_len,
 					    ~0, EXTENT_STATUS_DELAYED);
 		if (ret) {
+			if (reserved)
+				ext4_da_release_space(inode, 1);
 			retval = ret;
 			goto out_unlock;
 		}

@@ -61,7 +61,6 @@ void cifs_dump_detail(void *buf, struct TCP_Server_Info *server)
 void cifs_dump_mids(struct TCP_Server_Info *server)
 {
 #ifdef CONFIG_CIFS_DEBUG2
-	struct list_head *tmp;
 	struct mid_q_entry *mid_entry;
 
 	if (server == NULL)
@@ -69,8 +68,7 @@ void cifs_dump_mids(struct TCP_Server_Info *server)
 
 	cifs_dbg(VFS, "Dump pending requests:\n");
 	spin_lock(&GlobalMid_Lock);
-	list_for_each(tmp, &server->pending_mid_q) {
-		mid_entry = list_entry(tmp, struct mid_q_entry, qhead);
+	list_for_each_entry(mid_entry, &server->pending_mid_q, qhead) {
 		cifs_dbg(VFS, "State: %d Cmd: %d Pid: %d Cbdata: %p Mid %llu\n",
 			 mid_entry->mid_state,
 			 le16_to_cpu(mid_entry->command),
@@ -155,7 +153,7 @@ cifs_dump_iface(struct seq_file *m, struct cifs_server_iface *iface)
 
 static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 {
-	struct list_head *stmp, *tmp, *tmp1, *tmp2;
+	struct list_head *tmp, *tmp1, *tmp2;
 	struct TCP_Server_Info *server;
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon;
@@ -170,9 +168,7 @@ static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 	seq_printf(m, " <filename>\n");
 #endif /* CIFS_DEBUG2 */
 	spin_lock(&cifs_tcp_ses_lock);
-	list_for_each(stmp, &cifs_tcp_ses_list) {
-		server = list_entry(stmp, struct TCP_Server_Info,
-				    tcp_ses_list);
+	list_for_each_entry(server, &cifs_tcp_ses_list, tcp_ses_list) {
 		list_for_each(tmp, &server->smb_ses_list) {
 			ses = list_entry(tmp, struct cifs_ses, smb_ses_list);
 			list_for_each(tmp1, &ses->tcon_list) {
@@ -207,7 +203,7 @@ static int cifs_debug_files_proc_show(struct seq_file *m, void *v)
 
 static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 {
-	struct list_head *tmp1, *tmp2, *tmp3;
+	struct list_head *tmp2, *tmp3;
 	struct mid_q_entry *mid_entry;
 	struct TCP_Server_Info *server;
 	struct cifs_ses *ses;
@@ -261,10 +257,7 @@ static int cifs_debug_data_proc_show(struct seq_file *m, void *v)
 
 	i = 0;
 	spin_lock(&cifs_tcp_ses_lock);
-	list_for_each(tmp1, &cifs_tcp_ses_list) {
-		server = list_entry(tmp1, struct TCP_Server_Info,
-				    tcp_ses_list);
-
+	list_for_each_entry(server, &cifs_tcp_ses_list, tcp_ses_list) {
 #ifdef CONFIG_CIFS_SMB_DIRECT
 		if (!server->rdma)
 			goto skip_rdma;
@@ -343,6 +336,8 @@ skip_rdma:
 			seq_printf(m, " signed");
 		if (server->posix_ext_supported)
 			seq_printf(m, " posix");
+		if (server->nosharesock)
+			seq_printf(m, " nosharesock");
 
 		i++;
 		list_for_each(tmp2, &server->smb_ses_list) {
@@ -367,6 +362,10 @@ skip_rdma:
 				ses->ses_count, ses->serverOS, ses->serverNOS,
 				ses->capabilities, ses->status);
 			}
+
+			seq_printf(m,"Security type: %s\n",
+				get_security_type_str(server->ops->select_sectype(server, ses->sectype)));
+
 			if (server->rdma)
 				seq_printf(m, "RDMA\n\t");
 			seq_printf(m, "TCP status: %d Instance: %d\n\tLocal Users To "
@@ -387,7 +386,11 @@ skip_rdma:
 			if (ses->sign)
 				seq_puts(m, " signed");
 
-			seq_puts(m, "\n\tShares:");
+			seq_printf(m, "\n\tUser: %d Cred User: %d",
+				   from_kuid(&init_user_ns, ses->linux_uid),
+				   from_kuid(&init_user_ns, ses->cred_uid));
+
+			seq_puts(m, "\n\n\tShares:");
 			j = 0;
 
 			seq_printf(m, "\n\t%d) IPC: ", j);
@@ -520,7 +523,7 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
 #ifdef CONFIG_CIFS_STATS2
 	int j;
 #endif /* STATS2 */
-	struct list_head *tmp1, *tmp2, *tmp3;
+	struct list_head *tmp2, *tmp3;
 	struct TCP_Server_Info *server;
 	struct cifs_ses *ses;
 	struct cifs_tcon *tcon;
@@ -551,9 +554,7 @@ static int cifs_stats_proc_show(struct seq_file *m, void *v)
 
 	i = 0;
 	spin_lock(&cifs_tcp_ses_lock);
-	list_for_each(tmp1, &cifs_tcp_ses_list) {
-		server = list_entry(tmp1, struct TCP_Server_Info,
-				    tcp_ses_list);
+	list_for_each_entry(server, &cifs_tcp_ses_list, tcp_ses_list) {
 		seq_printf(m, "\nMax requests in flight: %d", server->max_in_flight);
 #ifdef CONFIG_CIFS_STATS2
 		seq_puts(m, "\nTotal time spent processing by command. Time ");

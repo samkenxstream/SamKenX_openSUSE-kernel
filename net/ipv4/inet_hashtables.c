@@ -226,10 +226,8 @@ begin:
 	phash = 0;
 
 	sk_for_each_rcu(sk, &ilb->head) {
-		if (unlikely(is_a_nulls(&sk->sk_nulls_node))) {
-			pr_info("%s: bsc#1180624 race encountered\n", __func__);
+		if (unlikely(is_a_nulls(&sk->sk_nulls_node)))
 			goto begin;
-		}
 		score = compute_score(sk, net, hnum, daddr, dif, exact_dif);
 		if (score > hiscore) {
 			reuseport = sk->sk_reuseport;
@@ -295,10 +293,8 @@ struct sock *__inet_lookup_established(struct net *net,
 
 begin:
 	sk_nulls_for_each_rcu(sk, node, &head->chain) {
-		if (unlikely(!node)) {
-			pr_info("%s: bsc#1151794 race encountered\n", __func__);
+		if (unlikely(!node))
 			goto begin;
-		}
 		if (sk->sk_hash != hash)
 			continue;
 		if (likely(INET_MATCH(sk, net, acookie,

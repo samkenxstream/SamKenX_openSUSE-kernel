@@ -2498,6 +2498,7 @@ static struct swap_info_struct *alloc_swap_info(void)
 static int claim_swapfile(struct swap_info_struct *p, struct inode *inode)
 {
 	int error;
+	struct dentry *dentry = p->swap_file->f_path.dentry;
 
 	if (S_ISBLK(inode->i_mode)) {
 		p->bdev = bdgrab(I_BDEV(inode));
@@ -2515,6 +2516,8 @@ static int claim_swapfile(struct swap_info_struct *p, struct inode *inode)
 	} else if (S_ISREG(inode->i_mode)) {
 		p->bdev = inode->i_sb->s_bdev;
 		inode_lock(inode);
+		if (d_unlinked(dentry) || cant_mount(dentry))
+			return -ENOENT;
 		if (IS_SWAPFILE(inode))
 			return -EBUSY;
 	} else

@@ -42,7 +42,7 @@ static long cifs_ioctl_query_info(unsigned int xid, struct file *filep,
 	struct cifs_sb_info *cifs_sb = CIFS_SB(inode->i_sb);
 	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
 	struct dentry *dentry = filep->f_path.dentry;
-	unsigned char *path;
+	const unsigned char *path;
 	__le16 *utf16_path = NULL, root_path;
 	int rc = 0;
 
@@ -161,6 +161,56 @@ static long smb_mnt_get_fsinfo(unsigned int xid, struct cifs_tcon *tcon,
 	return rc;
 }
 
+static int cifs_shutdown(struct super_block *sb, unsigned long arg)
+{
+	struct cifs_sb_info *sbi = CIFS_SB(sb);
+	__u32 flags;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	if (get_user(flags, (__u32 __user *)arg))
+		return -EFAULT;
+
+	if (flags > CIFS_GOING_FLAGS_NOLOGFLUSH)
+		return -EINVAL;
+
+	if (cifs_forced_shutdown(sbi))
+		return 0;
+
+	cifs_dbg(VFS, "shut down requested (%d)", flags);
+/*	trace_cifs_shutdown(sb, flags);*/
+
+	/*
+	 * see:
+	 *   https://man7.org/linux/man-pages/man2/ioctl_xfs_goingdown.2.html
+	 * for more information and description of original intent of the flags
+	 */
+	switch (flags) {
+	/*
+	 * We could add support later for default flag which requires:
+	 *     "Flush all dirty data and metadata to disk"
+	 * would need to call syncfs or equivalent to flush page cache for
+	 * the mount and then issue fsync to server (if nostrictsync not set)
+	 */
+	case CIFS_GOING_FLAGS_DEFAULT:
+		cifs_dbg(FYI, "shutdown with default flag not supported\n");
+		return -EINVAL;
+	/*
+	 * FLAGS_LOGFLUSH is easy since it asks to write out metadata (not
+	 * data) but metadata writes are not cached on the client, so can treat
+	 * it similarly to NOLOGFLUSH
+	 */
+	case CIFS_GOING_FLAGS_LOGFLUSH:
+	case CIFS_GOING_FLAGS_NOLOGFLUSH:
+		sbi->mnt_cifs_flags |= CIFS_MOUNT_SHUTDOWN;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
 long cifs_ioctl(struct file *filep, unsigned int command, unsigned long arg)
 {
 	struct inode *inode = file_inode(filep);
@@ -169,6 +219,7 @@ long cifs_ioctl(struct file *filep, unsigned int command, unsigned long arg)
 	unsigned int xid;
 	struct cifsFileInfo *pSMBFile = filep->private_data;
 	struct cifs_tcon *tcon;
+	struct tcon_link *tlink;
 	struct cifs_sb_info *cifs_sb;
 	__u64	ExtAttrBits = 0;
 	__u64   caps;
@@ -307,13 +358,22 @@ long cifs_ioctl(struct file *filep, unsigned int command, unsigned long arg)
 				break;
 			}
 			cifs_sb = CIFS_SB(inode->i_sb);
-			tcon = tlink_tcon(cifs_sb_tlink(cifs_sb));
+			tlink = cifs_sb_tlink(cifs_sb);
+			if (IS_ERR(tlink)) {
+				rc = PTR_ERR(tlink);
+				break;
+			}
+			tcon = tlink_tcon(tlink);
 			if (tcon && tcon->ses->server->ops->notify) {
 				rc = tcon->ses->server->ops->notify(xid,
 						filep, (void __user *)arg);
 				cifs_dbg(FYI, "ioctl notify rc %d\n", rc);
 			} else
 				rc = -EOPNOTSUPP;
+			cifs_put_tlink(tlink);
+			break;
+		case CIFS_IOC_SHUTDOWN:
+			rc = cifs_shutdown(inode->i_sb, arg);
 			break;
 		default:
 			cifs_dbg(FYI, "unsupported ioctl\n");

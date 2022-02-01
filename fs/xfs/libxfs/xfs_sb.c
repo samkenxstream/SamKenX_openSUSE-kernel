@@ -40,6 +40,8 @@
 #include "xfs_rmap_btree.h"
 #include "xfs_bmap.h"
 #include "xfs_refcount_btree.h"
+#include "xfs_da_format.h"
+#include "xfs_da_btree.h"
 
 /*
  * Physical superblock buffer manipulations. Shared with libxfs in userspace.
@@ -890,4 +892,192 @@ xfs_sync_sb(
 	if (wait)
 		xfs_trans_set_sync(tp);
 	return xfs_trans_commit(tp);
+}
+
+/*
+ * Update all the secondary superblocks to match the new state of the primary.
+ * Because we are completely overwriting all the existing fields in the
+ * secondary superblock buffers, there is no need to read them in from disk.
+ * Just get a new buffer, stamp it and write it.
+ *
+ * The sb buffers need to be cached here so that we serialise against other
+ * operations that access the secondary superblocks, but we don't want to keep
+ * them in memory once it is written so we mark it as a one-shot buffer.
+ */
+int
+xfs_update_secondary_sbs(
+	struct xfs_mount	*mp)
+{
+	xfs_agnumber_t		agno;
+	int			saved_error = 0;
+	int			error = 0;
+	LIST_HEAD		(buffer_list);
+
+	/* update secondary superblocks. */
+	for (agno = 1; agno < mp->m_sb.sb_agcount; agno++) {
+		struct xfs_buf		*bp;
+
+		bp = xfs_buf_get(mp->m_ddev_targp,
+				 XFS_AG_DADDR(mp, agno, XFS_SB_DADDR),
+				 XFS_FSS_TO_BB(mp, 1), 0);
+		/*
+		 * If we get an error reading or writing alternate superblocks,
+		 * continue.  xfs_repair chooses the "best" superblock based
+		 * on most matches; if we break early, we'll leave more
+		 * superblocks un-updated than updated, and xfs_repair may
+		 * pick them over the properly-updated primary.
+		 */
+		if (!bp) {
+			xfs_warn(mp,
+		"error allocating secondary superblock for ag %d",
+				agno);
+			if (!saved_error)
+				saved_error = -ENOMEM;
+			continue;
+		}
+
+		bp->b_ops = &xfs_sb_buf_ops;
+		xfs_buf_oneshot(bp);
+		xfs_buf_zero(bp, 0, BBTOB(bp->b_length));
+		xfs_sb_to_disk(XFS_BUF_TO_SBP(bp), &mp->m_sb);
+		xfs_buf_delwri_queue(bp, &buffer_list);
+		xfs_buf_relse(bp);
+
+		/* don't hold too many buffers at once */
+		if (agno % 16)
+			continue;
+
+		error = xfs_buf_delwri_submit(&buffer_list);
+		if (error) {
+			xfs_warn(mp,
+		"write error %d updating a secondary superblock near ag %d",
+				error, agno);
+			if (!saved_error)
+				saved_error = error;
+			continue;
+		}
+	}
+	error = xfs_buf_delwri_submit(&buffer_list);
+	if (error) {
+		xfs_warn(mp,
+		"write error %d updating a secondary superblock near ag %d",
+			error, agno);
+	}
+
+	return saved_error ? saved_error : error;
+}
+
+/*
+ * Same behavior as xfs_sync_sb, except that it is always synchronous and it
+ * also writes the superblock buffer to disk sector 0 immediately.
+ */
+int
+xfs_sync_sb_buf(
+	struct xfs_mount	*mp)
+{
+	struct xfs_trans	*tp;
+	int			error;
+
+	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_sb, 0, 0, 0, &tp);
+	if (error)
+		return error;
+
+	xfs_log_sb(tp);
+	xfs_trans_bhold(tp, mp->m_sb_bp);
+	xfs_trans_set_sync(tp);
+	error = xfs_trans_commit(tp);
+	if (error)
+		goto out;
+	/*
+	 * write out the sb buffer to get the changes to disk
+	 */
+	error = xfs_bwrite(mp->m_sb_bp);
+out:
+	xfs_buf_relse(mp->m_sb_bp);
+	return error;
+}
+
+int
+xfs_fs_geometry(
+	struct xfs_sb		*sbp,
+	struct xfs_fsop_geom	*geo,
+	int			struct_version)
+{
+	memset(geo, 0, sizeof(struct xfs_fsop_geom));
+
+	geo->blocksize = sbp->sb_blocksize;
+	geo->rtextsize = sbp->sb_rextsize;
+	geo->agblocks = sbp->sb_agblocks;
+	geo->agcount = sbp->sb_agcount;
+	geo->logblocks = sbp->sb_logblocks;
+	geo->sectsize = sbp->sb_sectsize;
+	geo->inodesize = sbp->sb_inodesize;
+	geo->imaxpct = sbp->sb_imax_pct;
+	geo->datablocks = sbp->sb_dblocks;
+	geo->rtblocks = sbp->sb_rblocks;
+	geo->rtextents = sbp->sb_rextents;
+	geo->logstart = sbp->sb_logstart;
+	BUILD_BUG_ON(sizeof(geo->uuid) != sizeof(sbp->sb_uuid));
+	memcpy(geo->uuid, &sbp->sb_uuid, sizeof(sbp->sb_uuid));
+
+	if (struct_version < 2)
+		return 0;
+
+	geo->sunit = sbp->sb_unit;
+	geo->swidth = sbp->sb_width;
+
+	if (struct_version < 3)
+		return 0;
+
+	geo->version = XFS_FSOP_GEOM_VERSION;
+	geo->flags = XFS_FSOP_GEOM_FLAGS_NLINK |
+		     XFS_FSOP_GEOM_FLAGS_DIRV2;
+	if (xfs_sb_version_hasattr(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_ATTR;
+	if (xfs_sb_version_hasquota(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_QUOTA;
+	if (xfs_sb_version_hasalign(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_IALIGN;
+	if (xfs_sb_version_hasdalign(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_DALIGN;
+	if (xfs_sb_version_hasextflgbit(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_EXTFLG;
+	if (xfs_sb_version_hassector(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_SECTOR;
+	if (xfs_sb_version_hasasciici(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_DIRV2CI;
+	if (xfs_sb_version_haslazysbcount(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_LAZYSB;
+	if (xfs_sb_version_hasattr2(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_ATTR2;
+	if (xfs_sb_version_hasprojid32bit(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_PROJID32;
+	if (xfs_sb_version_hascrc(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_V5SB;
+	if (xfs_sb_version_hasftype(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_FTYPE;
+	if (xfs_sb_version_hasfinobt(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_FINOBT;
+	if (xfs_sb_version_hassparseinodes(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_SPINODES;
+	if (xfs_sb_version_hasrmapbt(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_RMAPBT;
+	if (xfs_sb_version_hasreflink(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_REFLINK;
+	if (xfs_sb_version_hassector(sbp))
+		geo->logsectsize = sbp->sb_logsectsize;
+	else
+		geo->logsectsize = BBSIZE;
+	geo->rtsectsize = sbp->sb_blocksize;
+	geo->dirblocksize = xfs_dir2_dirblock_bytes(sbp);
+
+	if (struct_version < 4)
+		return 0;
+
+	if (xfs_sb_version_haslogv2(sbp))
+		geo->flags |= XFS_FSOP_GEOM_FLAGS_LOGV2;
+
+	geo->logsunit = sbp->sb_logsunit;
+
+	return 0;
 }

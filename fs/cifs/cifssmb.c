@@ -114,7 +114,7 @@ cifs_mark_open_files_invalid(struct cifs_tcon *tcon)
 	mutex_lock(&tcon->crfid.fid_mutex);
 	tcon->crfid.is_valid = false;
 	/* cached handle is not valid, so SMB2_CLOSE won't be sent below */
-	close_shroot_lease_locked(&tcon->crfid);
+	close_cached_dir_lease_locked(&tcon->crfid);
 	memset(tcon->crfid.fid, 0, sizeof(struct cifs_fid));
 	mutex_unlock(&tcon->crfid.fid_mutex);
 
@@ -885,8 +885,11 @@ PsxDelete:
 				InformationLevel) - 4;
 	offset = param_offset + params;
 
-	/* Setup pointer to Request Data (inode type) */
-	pRqD = (struct unlink_psx_rq *)(((char *)&pSMB->hdr.Protocol) + offset);
+	/* Setup pointer to Request Data (inode type).
+	 * Note that SMB offsets are from the beginning of SMB which is 4 bytes
+	 * in, after RFC1001 field
+	 */
+	pRqD = (struct unlink_psx_rq *)((char *)(pSMB) + offset + 4);
 	pRqD->type = cpu_to_le16(type);
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);
 	pSMB->DataOffset = cpu_to_le16(offset);
@@ -1093,7 +1096,8 @@ PsxCreat:
 	param_offset = offsetof(struct smb_com_transaction2_spi_req,
 				InformationLevel) - 4;
 	offset = param_offset + params;
-	pdata = (OPEN_PSX_REQ *)(((char *)&pSMB->hdr.Protocol) + offset);
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	pdata = (OPEN_PSX_REQ *)((char *)(pSMB) + offset + 4);
 	pdata->Level = cpu_to_le16(SMB_QUERY_FILE_UNIX_BASIC);
 	pdata->Permissions = cpu_to_le64(mode);
 	pdata->PosixOpenFlags = cpu_to_le32(posix_flags);
@@ -2061,8 +2065,8 @@ cifs_writev_requeue(struct cifs_writedata *wdata)
 			}
 		}
 
+		kref_put(&wdata2->refcount, cifs_writedata_release);
 		if (rc) {
-			kref_put(&wdata2->refcount, cifs_writedata_release);
 			if (is_retryable_error(rc))
 				continue;
 			i += nr_pages;
@@ -2549,8 +2553,9 @@ CIFSSMBPosixLock(const unsigned int xid, struct cifs_tcon *tcon,
 	pSMB->TotalDataCount = pSMB->DataCount;
 	pSMB->TotalParameterCount = pSMB->ParameterCount;
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
 	parm_data = (struct cifs_posix_lock *)
-			(((char *) &pSMB->hdr.Protocol) + offset);
+			(((char *)pSMB) + offset + 4);
 
 	parm_data->lock_type = cpu_to_le16(lock_type);
 	if (waitFlag) {
@@ -2779,7 +2784,8 @@ int CIFSSMBRenameOpenFile(const unsigned int xid, struct cifs_tcon *pTcon,
 	param_offset = offsetof(struct smb_com_transaction2_sfi_req, Fid) - 4;
 	offset = param_offset + params;
 
-	data_offset = (char *) (&pSMB->hdr.Protocol) + offset;
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	data_offset = (char *)(pSMB) + offset + 4;
 	rename_info = (struct set_file_rename *) data_offset;
 	pSMB->MaxParameterCount = cpu_to_le16(2);
 	pSMB->MaxDataCount = cpu_to_le16(1000); /* BB find max SMB from sess */
@@ -2937,7 +2943,8 @@ createSymLinkRetry:
 				InformationLevel) - 4;
 	offset = param_offset + params;
 
-	data_offset = (char *) (&pSMB->hdr.Protocol) + offset;
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	data_offset = (char *)pSMB + offset + 4;
 	if (pSMB->hdr.Flags2 & SMBFLG2_UNICODE) {
 		name_len_target =
 		    cifsConvertToUTF16((__le16 *) data_offset, toName,
@@ -3021,7 +3028,8 @@ createHardLinkRetry:
 				InformationLevel) - 4;
 	offset = param_offset + params;
 
-	data_offset = (char *) (&pSMB->hdr.Protocol) + offset;
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	data_offset = (char *)pSMB + offset + 4;
 	if (pSMB->hdr.Flags2 & SMBFLG2_UNICODE) {
 		name_len_target =
 		    cifsConvertToUTF16((__le16 *) data_offset, fromName,
@@ -5638,9 +5646,9 @@ CIFSSMBSetFileSize(const unsigned int xid, struct cifs_tcon *tcon,
 	pSMB->TotalDataCount = pSMB->DataCount;
 	pSMB->TotalParameterCount = pSMB->ParameterCount;
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
 	parm_data =
-		(struct file_end_of_file_info *) (((char *) &pSMB->hdr.Protocol)
-				+ offset);
+		(struct file_end_of_file_info *)(((char *)pSMB) + offset + 4);
 	pSMB->DataOffset = cpu_to_le16(offset);
 	parm_data->FileSize = cpu_to_le64(size);
 	pSMB->Fid = cfile->fid.netfid;
@@ -5773,7 +5781,8 @@ CIFSSMBSetFileDisposition(const unsigned int xid, struct cifs_tcon *tcon,
 	param_offset = offsetof(struct smb_com_transaction2_sfi_req, Fid) - 4;
 	offset = param_offset + params;
 
-	data_offset = (char *) (&pSMB->hdr.Protocol) + offset;
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	data_offset = (char *)(pSMB) + offset + 4;
 
 	count = 1;
 	pSMB->MaxParameterCount = cpu_to_le16(2);
@@ -5803,10 +5812,42 @@ CIFSSMBSetFileDisposition(const unsigned int xid, struct cifs_tcon *tcon,
 	return rc;
 }
 
+static int
+CIFSSMBSetPathInfoFB(const unsigned int xid, struct cifs_tcon *tcon,
+		     const char *fileName, const FILE_BASIC_INFO *data,
+		     const struct nls_table *nls_codepage,
+		     struct cifs_sb_info *cifs_sb)
+{
+	int oplock = 0;
+	struct cifs_open_parms oparms;
+	struct cifs_fid fid;
+	int rc;
+
+	oparms.tcon = tcon;
+	oparms.cifs_sb = cifs_sb;
+	oparms.desired_access = GENERIC_WRITE;
+	oparms.create_options = cifs_create_options(cifs_sb, 0);
+	oparms.disposition = FILE_OPEN;
+	oparms.path = fileName;
+	oparms.fid = &fid;
+	oparms.reconnect = false;
+
+	rc = CIFS_open(xid, &oparms, &oplock, NULL);
+	if (rc)
+		goto out;
+
+	rc = CIFSSMBSetFileInfo(xid, tcon, data, fid.netfid, current->tgid);
+	CIFSSMBClose(xid, tcon, fid.netfid);
+out:
+
+	return rc;
+}
+
 int
 CIFSSMBSetPathInfo(const unsigned int xid, struct cifs_tcon *tcon,
 		   const char *fileName, const FILE_BASIC_INFO *data,
-		   const struct nls_table *nls_codepage, int remap)
+		   const struct nls_table *nls_codepage,
+		     struct cifs_sb_info *cifs_sb)
 {
 	TRANSACTION2_SPI_REQ *pSMB = NULL;
 	TRANSACTION2_SPI_RSP *pSMBr = NULL;
@@ -5815,6 +5856,7 @@ CIFSSMBSetPathInfo(const unsigned int xid, struct cifs_tcon *tcon,
 	int bytes_returned = 0;
 	char *data_offset;
 	__u16 params, param_offset, offset, byte_count, count;
+	int remap = cifs_remap(cifs_sb);
 
 	cifs_dbg(FYI, "In SetTimes\n");
 
@@ -5877,58 +5919,12 @@ SetTimesRetry:
 	if (rc == -EAGAIN)
 		goto SetTimesRetry;
 
-	return rc;
-}
-
-/* Can not be used to set time stamps yet (due to old DOS time format) */
-/* Can be used to set attributes */
-#if 0  /* Possibly not needed - since it turns out that strangely NT4 has a bug
-	  handling it anyway and NT4 was what we thought it would be needed for
-	  Do not delete it until we prove whether needed for Win9x though */
-int
-CIFSSMBSetAttrLegacy(unsigned int xid, struct cifs_tcon *tcon, char *fileName,
-		__u16 dos_attrs, const struct nls_table *nls_codepage)
-{
-	SETATTR_REQ *pSMB = NULL;
-	SETATTR_RSP *pSMBr = NULL;
-	int rc = 0;
-	int bytes_returned;
-	int name_len;
-
-	cifs_dbg(FYI, "In SetAttrLegacy\n");
-
-SetAttrLgcyRetry:
-	rc = smb_init(SMB_COM_SETATTR, 8, tcon, (void **) &pSMB,
-		      (void **) &pSMBr);
-	if (rc)
-		return rc;
-
-	if (pSMB->hdr.Flags2 & SMBFLG2_UNICODE) {
-		name_len =
-			ConvertToUTF16((__le16 *) pSMB->fileName, fileName,
-				       PATH_MAX, nls_codepage);
-		name_len++;     /* trailing null */
-		name_len *= 2;
-	} else {
-		name_len = copy_path_name(pSMB->fileName, fileName);
-	}
-	pSMB->attr = cpu_to_le16(dos_attrs);
-	pSMB->BufferFormat = 0x04;
-	inc_rfc1001_len(pSMB, name_len + 1);
-	pSMB->ByteCount = cpu_to_le16(name_len + 1);
-	rc = SendReceive(xid, tcon->ses, (struct smb_hdr *) pSMB,
-			 (struct smb_hdr *) pSMBr, &bytes_returned, 0);
-	if (rc)
-		cifs_dbg(FYI, "Error in LegacySetAttr = %d\n", rc);
-
-	cifs_buf_release(pSMB);
-
-	if (rc == -EAGAIN)
-		goto SetAttrLgcyRetry;
+	if (rc == -EOPNOTSUPP)
+		return CIFSSMBSetPathInfoFB(xid, tcon, fileName, data,
+					    nls_codepage, cifs_sb);
 
 	return rc;
 }
-#endif /* temporarily unneeded SetAttr legacy function */
 
 static void
 cifs_fill_unix_set_info(FILE_UNIX_BASIC_INFO *data_offset,
@@ -6087,9 +6083,8 @@ setPermsRetry:
 	param_offset = offsetof(struct smb_com_transaction2_spi_req,
 				InformationLevel) - 4;
 	offset = param_offset + params;
-	data_offset =
-	    (FILE_UNIX_BASIC_INFO *) ((char *) &pSMB->hdr.Protocol +
-				      offset);
+	/* SMB offsets are from the beginning of SMB which is 4 bytes in, after RFC1001 field */
+	data_offset = (FILE_UNIX_BASIC_INFO *)((char *) pSMB + offset + 4);
 	memset(data_offset, 0, count);
 	pSMB->DataOffset = cpu_to_le16(offset);
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);

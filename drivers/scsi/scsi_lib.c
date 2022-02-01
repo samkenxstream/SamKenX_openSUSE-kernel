@@ -922,7 +922,7 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 
 	/*
 	 * If there had been no error, but we have leftover bytes in the
-	 * requeues just queue the command up again.
+	 * request just queue the command up again.
 	 */
 	if (result == 0)
 		goto requeue;
@@ -997,6 +997,7 @@ void scsi_io_completion(struct scsi_cmnd *cmd, unsigned int good_bytes)
 				case 0x07: /* operation in progress */
 				case 0x08: /* Long write in progress */
 				case 0x09: /* self test in progress */
+				case 0x11: /* notify (enable spinup) required */
 				case 0x14: /* space allocation in progress */
 				case 0x1a: /* start stop unit in progress */
 				case 0x1b: /* sanitize in progress */

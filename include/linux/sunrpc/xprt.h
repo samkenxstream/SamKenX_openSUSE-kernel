@@ -283,7 +283,14 @@ struct rpc_xprt {
 	struct dentry		*debugfs;		/* debugfs directory */
 	atomic_t		inject_disconnect;
 #endif
+#ifndef __GENKSYMS__
+	union {
+		struct rcu_head		rcu;
+		atomic_long_t		queuelen;
+	};
+#else
 	struct rcu_head		rcu;
+#endif
 };
 
 #if defined(CONFIG_SUNRPC_BACKCHANNEL)

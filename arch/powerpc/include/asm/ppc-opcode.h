@@ -195,6 +195,7 @@
 #define OP_LQ    56
 
 /* sorted alphabetically */
+#define PPC_INST_BCCTR_FLUSH		0x4c400420
 #define PPC_INST_BHRBE			0x7c00025c
 #define PPC_INST_CLRBHRB		0x7c00035c
 #define PPC_INST_COPY			0x7c20060c
@@ -252,6 +253,7 @@
 #define PPC_INST_MFSPR_DSCR_USER_MASK	0xfc1ffffe
 #define PPC_INST_MTSPR_DSCR_USER	0x7c0303a6
 #define PPC_INST_MTSPR_DSCR_USER_MASK	0xfc1ffffe
+#define PPC_INST_EIEIO			0x7c0006ac
 #define PPC_INST_MFVSRD			0x7c000066
 #define PPC_INST_MTVSRD			0x7c000166
 #define PPC_INST_SLBFEE			0x7c0007a7
@@ -330,6 +332,7 @@
 #define PPC_INST_BLR			0x4e800020
 #define PPC_INST_BLRL			0x4e800021
 #define PPC_INST_BCTR			0x4e800420
+#define PPC_INST_BCTRL			0x4e800421
 #define PPC_INST_MULLD			0x7c0001d2
 #define PPC_INST_MULLW			0x7c0001d6
 #define PPC_INST_MULHWU			0x7c000016
@@ -410,6 +413,7 @@
 #endif
 
 /* Deal with instructions that older assemblers aren't aware of */
+#define	PPC_BCCTR_FLUSH		stringify_in_c(.long PPC_INST_BCCTR_FLUSH)
 #define	PPC_CP_ABORT		stringify_in_c(.long PPC_INST_CP_ABORT)
 #define	PPC_COPY(a, b)		stringify_in_c(.long PPC_INST_COPY | \
 					___PPC_RA(a) | ___PPC_RB(b))

@@ -978,7 +978,7 @@ static int imxfb_probe(struct platform_device *pdev)
 					 &fbi->map_dma, GFP_KERNEL);
 
 	if (!info->screen_base) {
-		dev_err(&pdev->dev, "Failed to allocate video RAM: %d\n", ret);
+		dev_err(&pdev->dev, "Failed to allocate video RAM\n");
 		ret = -ENOMEM;
 		goto failed_map;
 	}

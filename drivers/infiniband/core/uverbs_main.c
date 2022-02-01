@@ -46,6 +46,7 @@
 #include <linux/anon_inodes.h>
 #include <linux/slab.h>
 #include <linux/sched/mm.h>
+#include <linux/nospec.h>
 
 #include <linux/uaccess.h>
 
@@ -765,6 +766,7 @@ static ssize_t ib_uverbs_write(struct file *filp, const char __user *buf,
 	buf += sizeof(hdr);
 
 	if (!extended) {
+		command = array_index_nospec(command, ARRAY_SIZE(uverbs_cmd_table));
 		ret = uverbs_cmd_table[command](file, buf,
 						hdr.in_words * 4,
 						hdr.out_words * 4);
@@ -784,6 +786,7 @@ static ssize_t ib_uverbs_write(struct file *filp, const char __user *buf,
 					ex_hdr.provider_in_words * 8,
 					ex_hdr.provider_out_words * 8);
 
+		command = array_index_nospec(command, ARRAY_SIZE(uverbs_ex_cmd_table));
 		ret = uverbs_ex_cmd_table[command](file, &ucore, &uhw);
 		ret = (ret) ? : count;
 	}

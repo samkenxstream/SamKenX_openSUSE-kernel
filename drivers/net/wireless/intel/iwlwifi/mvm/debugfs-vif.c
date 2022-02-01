@@ -67,6 +67,7 @@
 #include "mvm.h"
 #include "fw/api/tof.h"
 #include "debugfs.h"
+#include <linux/nospec.h>
 
 static void iwl_dbgfs_update_pm(struct iwl_mvm *mvm,
 				 struct ieee80211_vif *vif,
@@ -981,6 +982,7 @@ static ssize_t iwl_dbgfs_tof_range_request_write(struct ieee80211_vif *vif,
 			ret = -EINVAL;
 			goto out;
 		}
+		i = array_index_nospec(i, IWL_MVM_TOF_MAX_APS);
 
 		ap.burst_period = cpu_to_le16(burst_period);
 
