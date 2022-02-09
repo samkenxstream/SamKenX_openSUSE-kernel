@@ -941,6 +941,19 @@ static void notify_and_destroy(struct net *net, struct sk_buff *skb,
 		qdisc_put(old);
 }
 
+static void qdisc_clear_nolock(struct Qdisc *sch)
+{
+	sch->flags &= ~TCQ_F_NOLOCK;
+	if (!(sch->flags & TCQ_F_CPUSTATS))
+		return;
+
+	free_percpu(sch->cpu_bstats);
+	free_percpu(sch->cpu_qstats);
+	sch->cpu_bstats = NULL;
+	sch->cpu_qstats = NULL;
+	sch->flags &= ~TCQ_F_CPUSTATS;
+}
+
 /* Graft qdisc "new" to class "classid" of qdisc "parent" or
  * to device "dev".
  *
@@ -1016,7 +1029,7 @@ skip:
 		/* Only support running class lockless if parent is lockless */
 		if (new && (new->flags & TCQ_F_NOLOCK) &&
 		    parent && !(parent->flags & TCQ_F_NOLOCK))
-			new->flags &= ~TCQ_F_NOLOCK;
+			qdisc_clear_nolock(new);
 
 		err = -EOPNOTSUPP;
 		if (cops && cops->graft) {

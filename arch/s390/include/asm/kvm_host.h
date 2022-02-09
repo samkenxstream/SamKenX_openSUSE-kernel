@@ -596,6 +596,7 @@ struct kvm_s390_float_interrupt {
 	struct kvm_s390_mchk_info mchk;
 	struct kvm_s390_ext_info srv_signal;
 	int next_rr_cpu;
+	/* indexed by vcpu_idx */
 	unsigned long idle_mask[BITS_TO_LONGS(KVM_MAX_VCPUS)];
 	struct mutex ais_lock;
 	u8 simm;
