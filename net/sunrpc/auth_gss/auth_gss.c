@@ -610,6 +610,8 @@ out:
 	return err;
 }
 
+static unsigned int upcall_timeout;
+
 static inline int
 gss_create_upcall(struct gss_auth *gss_auth, struct gss_cred *gss_cred)
 {
@@ -658,7 +660,13 @@ retry:
 			err = -ERESTARTSYS;
 			goto out_intr;
 		}
-		schedule();
+		if (upcall_timeout == 0)
+			schedule();
+		else if (schedule_timeout(upcall_timeout * HZ) == 0) {
+			pr_err("GSS upcall timed-out - please check rpc.gssd is healthy\n");
+			err = -ETIMEDOUT;
+			goto out_intr;
+		}
 	}
 	if (gss_msg->ctx)
 		gss_cred_set_ctx(cred, gss_msg->ctx);
@@ -2121,6 +2129,12 @@ module_param_named(key_expire_timeo,
 MODULE_PARM_DESC(key_expire_timeo, "Time (in seconds) at the end of a "
 		"credential keys lifetime where the NFS layer cleans up "
 		"prior to key expiration");
+
+module_param_named(upcall_timeo,
+		   upcall_timeout,
+		   uint, 0644);
+MODULE_PARM_DESC(upcall_timeo,
+		 "Time (in seconds) to wait for reply from rpc.gssd");
 
 module_init(init_rpcsec_gss)
 module_exit(exit_rpcsec_gss)
