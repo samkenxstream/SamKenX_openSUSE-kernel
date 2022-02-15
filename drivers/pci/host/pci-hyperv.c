@@ -974,6 +974,8 @@ static void hv_irq_unmask(struct irq_data *data)
 
 		cpumask_and(tmp, dest, cpu_online_mask);
 		cpumask_and(tmp, tmp, irq_data_get_affinity_mask(data));
+		if (cpumask_empty(tmp))
+			cpumask_and(tmp, dest, cpu_online_mask);
 		nr_bank = cpumask_to_vpset(&params->int_target.vp_set, tmp);
 		free_cpumask_var(tmp);
 
