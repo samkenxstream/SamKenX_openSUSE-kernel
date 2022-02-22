@@ -175,8 +175,10 @@ struct ap_card {
 	unsigned int functions;		/* AP device function bitfield. */
 	int queue_depth;		/* AP queue depth.*/
 	int id;				/* AP card number. */
-	unsigned int maxmsgsize;	/* AP msg limit for this card */
 	atomic_t total_request_count;	/* # requests ever for this AP device.*/
+#ifndef __GENKSYMS__
+	unsigned int maxmsgsize;	/* AP msg limit for this card */
+#endif
 };
 
 #define to_ap_card(x) container_of((x), struct ap_card, ap_dev.device)
@@ -210,8 +212,10 @@ struct ap_message {
 	unsigned long long psmid;	/* Message id. */
 	void *message;			/* Pointer to message buffer. */
 	size_t length;			/* actual msg len in msg buffer */
-	unsigned int bufsize;		/* allocated msg buffer size */
 	int rc;				/* Return code for this message */
+#ifndef __GENKSYMS__
+	unsigned int bufsize;		/* allocated msg buffer size */
+#endif
 
 	void *private;			/* ap driver private pointer. */
 	unsigned int special:1;		/* Used for special commands. */
