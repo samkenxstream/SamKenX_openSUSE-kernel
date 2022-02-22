@@ -74,6 +74,9 @@ static char *aqm_str;
 module_param_named(aqmask, aqm_str, charp, 0440);
 MODULE_PARM_DESC(aqmask, "AP bus domain mask.");
 
+atomic_t ap_max_msg_size = ATOMIC_INIT(AP_DEFAULT_MAX_MSG_SIZE);
+EXPORT_SYMBOL(ap_max_msg_size);
+
 static struct device *ap_root_device;
 
 DEFINE_SPINLOCK(ap_list_lock);
@@ -329,11 +332,24 @@ EXPORT_SYMBOL(ap_test_config_ctrl_domain);
  * Returns true if TAPQ succeeded and the info is filled or
  * false otherwise.
  */
-static bool ap_queue_info(ap_qid_t qid, int *q_type,
-			  unsigned int *q_fac, int *q_depth)
+static bool ap_queue_info(ap_qid_t qid, int *q_type, unsigned int *q_fac,
+			  int *q_depth, int *q_ml)
 {
 	struct ap_queue_status status;
-	unsigned long info = 0;
+	union {
+		unsigned long value;
+		struct {
+			unsigned int fac   : 32; /* facility bits */
+			unsigned int at	   :  8; /* ap type */
+			unsigned int _res1 :  8;
+			unsigned int _res2 :  4;
+			unsigned int ml	   :  4; /* apxl ml */
+			unsigned int _res3 :  4;
+			unsigned int qd	   :  4; /* queue depth */
+		} tapq_gr2;
+	} tapq_info;
+
+	tapq_info.value = 0;
 
 	/* make sure we don't run into a specifiation exception */
 	if (AP_QID_CARD(qid) > ap_max_adapter_id ||
@@ -341,7 +357,7 @@ static bool ap_queue_info(ap_qid_t qid, int *q_type,
 		return false;
 
 	/* call TAPQ on this APQN */
-	status = ap_test_queue(qid, ap_apft_available(), &info);
+	status = ap_test_queue(qid, ap_apft_available(), &tapq_info.value);
 	switch (status.response_code) {
 	case AP_RESPONSE_NORMAL:
 	case AP_RESPONSE_RESET_IN_PROGRESS:
@@ -350,11 +366,12 @@ static bool ap_queue_info(ap_qid_t qid, int *q_type,
 		 * info should be filled. All bits 0 is not possible as
 		 * there is at least one of the mode bits set.
 		 */
-		if (WARN_ON_ONCE(!info))
+		if (WARN_ON_ONCE(!tapq_info.value))
 			return false;
-		*q_type = (int)((info >> 24) & 0xff);
-		*q_fac = (unsigned int)(info >> 32);
-		*q_depth = (int)(info & 0xff);
+		*q_type = tapq_info.tapq_gr2.at;
+		*q_fac = tapq_info.tapq_gr2.fac;
+		*q_depth = tapq_info.tapq_gr2.qd;
+		*q_ml = tapq_info.tapq_gr2.ml;
 		switch (*q_type) {
 			/* For CEX2 and CEX3 the available functions
 			 * are not refrected by the facilities bits.
@@ -1377,7 +1394,7 @@ static void ap_scan_bus(struct work_struct *unused)
 	struct ap_card *ac;
 	struct device *dev;
 	ap_qid_t qid;
-	int comp_type, depth = 0, type = 0;
+	int comp_type, depth = 0, type = 0, ml = 0;
 	unsigned int func = 0;
 	int rc, id, dom, domains, defdomdevs = 0;
 
@@ -1428,7 +1445,8 @@ static void ap_scan_bus(struct work_struct *unused)
 				}
 				continue;
 			}
-			broken = !ap_queue_info(qid, &type, &func, &depth);
+			broken = !ap_queue_info(qid, &type, &func,
+						&depth, &ml);
 			if (dev) {
 				spin_lock_bh(&aq->lock);
 				if (broken ||
@@ -1456,13 +1474,19 @@ static void ap_scan_bus(struct work_struct *unused)
 			/* maybe a card device needs to be created first */
 			if (!ac) {
 				ac = ap_card_create(id, depth, type,
-						    comp_type, func);
+						    comp_type, func, ml);
 				if (!ac)
 					continue;
 				ac->ap_dev.device.bus = &ap_bus_type;
 				ac->ap_dev.device.parent = ap_root_device;
 				dev_set_name(&ac->ap_dev.device,
 					     "card%02x", id);
+				/* maybe enlarge ap_max_msg_size to support this card */
+				if (ac->maxmsgsize > atomic_read(&ap_max_msg_size)) {
+					atomic_set(&ap_max_msg_size, ac->maxmsgsize);
+					AP_DBF(DBF_INFO, "%s(%d) ap_max_msg_size update to %d byte\n",
+					       __func__, id, atomic_read(&ap_max_msg_size));
+				}
 				/* Register card with AP bus */
 				rc = device_register(&ac->ap_dev.device);
 				if (rc) {
