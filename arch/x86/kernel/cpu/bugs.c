@@ -1003,7 +1003,7 @@ static void __init spectre_v2_select_mitigation(void)
 			wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
 			goto specv2_set_mode;
 		}
-		/* fall through */
+
 	case SPECTRE_V2_CMD_RETPOLINE:
 		if (IS_ENABLED(CONFIG_RETPOLINE))
 			goto retpoline_auto;
