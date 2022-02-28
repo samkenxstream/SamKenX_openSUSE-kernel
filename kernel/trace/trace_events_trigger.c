@@ -1162,7 +1162,17 @@ static __init int register_trigger_snapshot_cmd(void) { return 0; }
 static void
 stacktrace_trigger(struct event_trigger_data *data, void *rec)
 {
-	trace_dump_stack(STACK_SKIP);
+	struct trace_event_file *file = data->private_data;
+	unsigned long flags;
+	int pc;
+
+	if (file) {
+		local_save_flags(flags);
+		pc = preempt_count();
+		__trace_stack(file->tr, flags, STACK_SKIP, pc);
+	} else {
+		trace_dump_stack(STACK_SKIP);
+	}
 }
 
 static void
