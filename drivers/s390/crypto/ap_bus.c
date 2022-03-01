@@ -74,6 +74,9 @@ static char *aqm_str;
 module_param_named(aqmask, aqm_str, charp, 0440);
 MODULE_PARM_DESC(aqmask, "AP bus domain mask.");
 
+atomic_t ap_max_msg_size = ATOMIC_INIT(AP_DEFAULT_MAX_MSG_SIZE);
+EXPORT_SYMBOL(ap_max_msg_size);
+
 static struct device *ap_root_device;
 
 DEFINE_SPINLOCK(ap_list_lock);
@@ -119,8 +122,10 @@ static unsigned long long poll_timeout = 250000;
 
 /* Suspend flag */
 static int ap_suspend_flag;
-/* Maximum domain id */
-static int ap_max_domain_id;
+/* Maximum domain id, if not given via qci */
+static int ap_max_domain_id = 15;
+/* Maximum adapter id, if not given via qci */
+static int ap_max_adapter_id = 63;
 /*
  * Flag to check if domain was set through module parameter domain=. This is
  * important when supsend and resume is done in a z/VM environment where the
@@ -226,11 +231,16 @@ EXPORT_SYMBOL(ap_query_configuration);
 
 /**
  * ap_init_configuration(): Allocate and query configuration array.
+ * Does also update the static variables ap_max_domain_id
+ * and ap_max_adapter_id if this info is available.
+
  */
 static void ap_init_configuration(void)
 {
-	if (!ap_configuration_available())
+	if (!ap_configuration_available()) {
+		AP_DBF(DBF_INFO, "%s QCI not supported\n", __func__);
 		return;
+	}
 
 	ap_configuration = kzalloc(sizeof(*ap_configuration), GFP_KERNEL);
 	if (!ap_configuration)
@@ -239,6 +249,20 @@ static void ap_init_configuration(void)
 		kfree(ap_configuration);
 		ap_configuration = NULL;
 		return;
+	}
+	AP_DBF(DBF_INFO, "%s successful fetched initial qci info\n", __func__);
+
+	if (ap_configuration->apxa) {
+		if (ap_configuration->Na) {
+			ap_max_adapter_id = ap_configuration->Na;
+			AP_DBF(DBF_INFO, "%s new ap_max_adapter_id is %d\n",
+			       __func__, ap_max_adapter_id);
+		}
+		if (ap_configuration->Nd) {
+			ap_max_domain_id = ap_configuration->Nd;
+			AP_DBF(DBF_INFO, "%s new ap_max_domain_id is %d\n",
+			       __func__, ap_max_domain_id);
+		}
 	}
 }
 
@@ -261,10 +285,11 @@ static inline int ap_test_config(unsigned int *field, unsigned int nr)
  */
 static inline int ap_test_config_card_id(unsigned int id)
 {
-	if (!ap_configuration)	/* QCI not supported */
-		/* only ids 0...3F may be probed */
-		return id < 0x40 ? 1 : 0;
-	return ap_test_config(ap_configuration->apm, id);
+	if (id > ap_max_adapter_id)
+		return 0;
+	if (ap_configuration)
+		return ap_test_config(ap_configuration->apm, id);
+	return 1;
 }
 
 /*
@@ -278,9 +303,11 @@ static inline int ap_test_config_card_id(unsigned int id)
  */
 int ap_test_config_usage_domain(unsigned int domain)
 {
-	if (!ap_configuration)	/* QCI not supported */
-		return domain < 16;
-	return ap_test_config(ap_configuration->aqm, domain);
+	if (domain > ap_max_domain_id)
+		return 0;
+	if (ap_configuration)
+		return ap_test_config(ap_configuration->aqm, domain);
+	return 1;
 }
 EXPORT_SYMBOL(ap_test_config_usage_domain);
 
@@ -294,43 +321,58 @@ EXPORT_SYMBOL(ap_test_config_usage_domain);
  */
 int ap_test_config_ctrl_domain(unsigned int domain)
 {
-	if (!ap_configuration)	/* QCI not supported */
+	if (!ap_configuration || domain > ap_max_domain_id)
 		return 0;
 	return ap_test_config(ap_configuration->adm, domain);
 }
 EXPORT_SYMBOL(ap_test_config_ctrl_domain);
 
-/**
- * ap_query_queue(): Check if an AP queue is available.
- * @qid: The AP queue number
- * @queue_depth: Pointer to queue depth value
- * @device_type: Pointer to device type value
- * @facilities: Pointer to facility indicator
+/*
+ * ap_queue_info(): Check and get AP queue info.
+ * Returns true if TAPQ succeeded and the info is filled or
+ * false otherwise.
  */
-static int ap_query_queue(ap_qid_t qid, int *queue_depth, int *device_type,
-			  unsigned int *facilities)
+static bool ap_queue_info(ap_qid_t qid, int *q_type, unsigned int *q_fac,
+			  int *q_depth, int *q_ml)
 {
 	struct ap_queue_status status;
-	unsigned long info;
-	int nd;
+	union {
+		unsigned long value;
+		struct {
+			unsigned int fac   : 32; /* facility bits */
+			unsigned int at	   :  8; /* ap type */
+			unsigned int _res1 :  8;
+			unsigned int _res2 :  4;
+			unsigned int ml	   :  4; /* apxl ml */
+			unsigned int _res3 :  4;
+			unsigned int qd	   :  4; /* queue depth */
+		} tapq_gr2;
+	} tapq_info;
 
-	if (!ap_test_config_card_id(AP_QID_CARD(qid)))
-		return -ENODEV;
+	tapq_info.value = 0;
 
-	status = ap_test_queue(qid, ap_apft_available(), &info);
+	/* make sure we don't run into a specifiation exception */
+	if (AP_QID_CARD(qid) > ap_max_adapter_id ||
+	    AP_QID_QUEUE(qid) > ap_max_domain_id)
+		return false;
+
+	/* call TAPQ on this APQN */
+	status = ap_test_queue(qid, ap_apft_available(), &tapq_info.value);
 	switch (status.response_code) {
 	case AP_RESPONSE_NORMAL:
-		*queue_depth = (int)(info & 0xff);
-		*device_type = (int)((info >> 24) & 0xff);
-		*facilities = (unsigned int)(info >> 32);
-		/* Update maximum domain id */
-		nd = (info >> 16) & 0xff;
-		/* if N bit is available, z13 and newer */
-		if ((info & (1UL << 57)) && nd > 0)
-			ap_max_domain_id = nd;
-		else /* older machine types */
-			ap_max_domain_id = 15;
-		switch (*device_type) {
+	case AP_RESPONSE_RESET_IN_PROGRESS:
+		/*
+		 * According to the architecture in all these cases the
+		 * info should be filled. All bits 0 is not possible as
+		 * there is at least one of the mode bits set.
+		 */
+		if (WARN_ON_ONCE(!tapq_info.value))
+			return false;
+		*q_type = tapq_info.tapq_gr2.at;
+		*q_fac = tapq_info.tapq_gr2.fac;
+		*q_depth = tapq_info.tapq_gr2.qd;
+		*q_ml = tapq_info.tapq_gr2.ml;
+		switch (*q_type) {
 			/* For CEX2 and CEX3 the available functions
 			 * are not refrected by the facilities bits.
 			 * Instead it is coded into the type. So here
@@ -338,27 +380,21 @@ static int ap_query_queue(ap_qid_t qid, int *queue_depth, int *device_type,
 			 */
 		case AP_DEVICE_TYPE_CEX2A:
 		case AP_DEVICE_TYPE_CEX3A:
-			*facilities |= 0x08000000;
+			*q_fac |= 0x08000000;
 			break;
 		case AP_DEVICE_TYPE_CEX2C:
 		case AP_DEVICE_TYPE_CEX3C:
-			*facilities |= 0x10000000;
+			*q_fac |= 0x10000000;
 			break;
 		default:
 			break;
 		}
-		return 0;
-	case AP_RESPONSE_Q_NOT_AVAIL:
-	case AP_RESPONSE_DECONFIGURED:
-	case AP_RESPONSE_CHECKSTOPPED:
-	case AP_RESPONSE_INVALID_ADDRESS:
-		return -ENODEV;
-	case AP_RESPONSE_RESET_IN_PROGRESS:
-	case AP_RESPONSE_OTHERWISE_CHANGED:
-	case AP_RESPONSE_BUSY:
-		return -EBUSY;
+		return true;
 	default:
-		BUG();
+		/*
+		 * A response code which indicates, there is no info available.
+		 */
+		return false;
 	}
 }
 
@@ -1155,16 +1191,17 @@ static BUS_ATTR_RW(poll_timeout);
 
 static ssize_t ap_max_domain_id_show(struct bus_type *bus, char *buf)
 {
-	int max_domain_id;
-
-	if (ap_configuration)
-		max_domain_id = ap_max_domain_id ? : -1;
-	else
-		max_domain_id = 15;
-	return snprintf(buf, PAGE_SIZE, "%d\n", max_domain_id);
+	return snprintf(buf, PAGE_SIZE, "%d\n", ap_max_domain_id);
 }
 
 static BUS_ATTR_RO(ap_max_domain_id);
+
+static ssize_t ap_max_adapter_id_show(struct bus_type *bus, char *buf)
+{
+	return snprintf(buf, PAGE_SIZE, "%d\n", ap_max_adapter_id);
+}
+
+static BUS_ATTR_RO(ap_max_adapter_id);
 
 static ssize_t apmask_show(struct bus_type *bus, char *buf)
 {
@@ -1237,6 +1274,7 @@ static struct bus_attribute *const ap_bus_attrs[] = {
 	&bus_attr_ap_interrupts,
 	&bus_attr_poll_timeout,
 	&bus_attr_ap_max_domain_id,
+	&bus_attr_ap_max_adapter_id,
 	&bus_attr_apmask,
 	&bus_attr_aqmask,
 	NULL,
@@ -1248,47 +1286,42 @@ static struct bus_attribute *const ap_bus_attrs[] = {
  */
 static void ap_select_domain(void)
 {
-	int count, max_count, best_domain;
 	struct ap_queue_status status;
-	int i, j;
+	int card, dom;
 
 	/*
-	 * We want to use a single domain. Either the one specified with
-	 * the "domain=" parameter or the domain with the maximum number
-	 * of devices.
+	 * Choose the default domain. Either the one specified with
+	 * the "domain=" parameter or the first domain with at least
+	 * one valid APQN.
 	 */
 	spin_lock_bh(&ap_domain_lock);
 	if (ap_domain_index >= 0) {
 		/* Domain has already been selected. */
-		spin_unlock_bh(&ap_domain_lock);
-		return;
+		goto out;
 	}
-	best_domain = -1;
-	max_count = 0;
-	for (i = 0; i < AP_DOMAINS; i++) {
-		if (!ap_test_config_usage_domain(i) ||
-		    !test_bit_inv(i, ap_perms.aqm))
+	for (dom = 0; dom <= ap_max_domain_id; dom++) {
+		if (!ap_test_config_usage_domain(dom) ||
+		    !test_bit_inv(dom, ap_perms.aqm))
 			continue;
-		count = 0;
-		for (j = 0; j < AP_DEVICES; j++) {
-			if (!ap_test_config_card_id(j))
+		for (card = 0; card <= ap_max_adapter_id; card++) {
+			if (!ap_test_config_card_id(card) ||
+			    !test_bit_inv(card, ap_perms.apm))
 				continue;
-			status = ap_test_queue(AP_MKQID(j, i),
+			status = ap_test_queue(AP_MKQID(card, dom),
 					       ap_apft_available(),
 					       NULL);
-			if (status.response_code != AP_RESPONSE_NORMAL)
-				continue;
-			count++;
+			if (status.response_code == AP_RESPONSE_NORMAL)
+				break;
 		}
-		if (count > max_count) {
-			max_count = count;
-			best_domain = i;
-		}
+		if (card <= ap_max_adapter_id)
+			break;
 	}
-	if (best_domain >= 0) {
-		ap_domain_index = best_domain;
-		AP_DBF(DBF_DEBUG, "new ap_domain_index=%d\n", ap_domain_index);
+	if (dom <= ap_max_domain_id) {
+		ap_domain_index = dom;
+		AP_DBF(DBF_DEBUG, "%s new default domain is %d\n",
+		       __func__, ap_domain_index);
 	}
+out:
 	spin_unlock_bh(&ap_domain_lock);
 }
 
@@ -1356,18 +1389,19 @@ static int __match_queue_device_with_qid(struct device *dev, void *data)
  */
 static void ap_scan_bus(struct work_struct *unused)
 {
+	bool broken;
 	struct ap_queue *aq;
 	struct ap_card *ac;
 	struct device *dev;
 	ap_qid_t qid;
-	int comp_type, depth = 0, type = 0;
+	int comp_type, depth = 0, type = 0, ml = 0;
 	unsigned int func = 0;
-	int rc, id, dom, borked, domains, defdomdevs = 0;
-
-	AP_DBF(DBF_DEBUG, "%s running\n", __func__);
+	int rc, id, dom, domains, defdomdevs = 0;
 
 	ap_query_configuration(ap_configuration);
 	ap_select_domain();
+
+	AP_DBF(DBF_DEBUG, "%s running\n", __func__);
 
 	for (id = 0; id < AP_DEVICES; id++) {
 		/* check if device is registered */
@@ -1411,26 +1445,27 @@ static void ap_scan_bus(struct work_struct *unused)
 				}
 				continue;
 			}
-			rc = ap_query_queue(qid, &depth, &type, &func);
+			broken = !ap_queue_info(qid, &type, &func,
+						&depth, &ml);
 			if (dev) {
 				spin_lock_bh(&aq->lock);
-				if (rc == -ENODEV ||
+				if (broken ||
 				    /* adapter reconfiguration */
 				    (ac && ac->functions != func))
 					aq->state = AP_STATE_BORKED;
-				borked = aq->state == AP_STATE_BORKED;
+				broken = aq->state == AP_STATE_BORKED;
 				spin_unlock_bh(&aq->lock);
-				if (borked)	/* Remove broken device */
+				if (broken)	/* Remove broken device */
 					device_unregister(dev);
 				put_device(dev);
-				if (!borked) {
+				if (!broken) {
 					domains++;
 					if (dom == ap_domain_index)
 						defdomdevs++;
 					continue;
 				}
 			}
-			if (rc)
+			if (broken)
 				continue;
 			/* a new queue device is needed, check out comp type */
 			comp_type = ap_get_compatible_type(qid, type, func);
@@ -1439,13 +1474,19 @@ static void ap_scan_bus(struct work_struct *unused)
 			/* maybe a card device needs to be created first */
 			if (!ac) {
 				ac = ap_card_create(id, depth, type,
-						    comp_type, func);
+						    comp_type, func, ml);
 				if (!ac)
 					continue;
 				ac->ap_dev.device.bus = &ap_bus_type;
 				ac->ap_dev.device.parent = ap_root_device;
 				dev_set_name(&ac->ap_dev.device,
 					     "card%02x", id);
+				/* maybe enlarge ap_max_msg_size to support this card */
+				if (ac->maxmsgsize > atomic_read(&ap_max_msg_size)) {
+					atomic_set(&ap_max_msg_size, ac->maxmsgsize);
+					AP_DBF(DBF_INFO, "%s(%d) ap_max_msg_size update to %d byte\n",
+					       __func__, id, atomic_read(&ap_max_msg_size));
+				}
 				/* Register card with AP bus */
 				rc = device_register(&ac->ap_dev.device);
 				if (rc) {
@@ -1561,7 +1602,6 @@ static void __init ap_perms_init(void)
  */
 int __init ap_module_init(void)
 {
-	int max_domain_id;
 	int rc, i;
 
 	rc = ap_debug_init();
@@ -1579,12 +1619,7 @@ int __init ap_module_init(void)
 	/* Get AP configuration data if available */
 	ap_init_configuration();
 
-	if (ap_configuration)
-		max_domain_id =
-			ap_max_domain_id ? ap_max_domain_id : AP_DOMAINS - 1;
-	else
-		max_domain_id = 15;
-	if (ap_domain_index < -1 || ap_domain_index > max_domain_id ||
+	if (ap_domain_index < -1 || ap_domain_index > ap_max_domain_id ||
 	    (ap_domain_index >= 0 &&
 	     !test_bit_inv(ap_domain_index, ap_perms.aqm))) {
 		pr_warn("%d is not a valid cryptographic domain\n",
