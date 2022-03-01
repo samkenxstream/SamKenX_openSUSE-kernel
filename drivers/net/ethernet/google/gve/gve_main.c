@@ -41,6 +41,7 @@ static void gve_get_stats(struct net_device *dev, struct rtnl_link_stats64 *s)
 {
 	struct gve_priv *priv = netdev_priv(dev);
 	unsigned int start;
+	u64 packets, bytes;
 	int ring;
 
 	if (priv->rx) {
@@ -48,10 +49,12 @@ static void gve_get_stats(struct net_device *dev, struct rtnl_link_stats64 *s)
 			do {
 				start =
 				  u64_stats_fetch_begin(&priv->rx[ring].statss);
-				s->rx_packets += priv->rx[ring].rpackets;
-				s->rx_bytes += priv->rx[ring].rbytes;
+				packets = priv->rx[ring].rpackets;
+				bytes = priv->rx[ring].rbytes;
 			} while (u64_stats_fetch_retry(&priv->rx[ring].statss,
 						       start));
+			s->rx_packets += packets;
+			s->rx_bytes += bytes;
 		}
 	}
 	if (priv->tx) {
@@ -59,10 +62,12 @@ static void gve_get_stats(struct net_device *dev, struct rtnl_link_stats64 *s)
 			do {
 				start =
 				  u64_stats_fetch_begin(&priv->tx[ring].statss);
-				s->tx_packets += priv->tx[ring].pkt_done;
-				s->tx_bytes += priv->tx[ring].bytes_done;
+				packets = priv->tx[ring].pkt_done;
+				bytes = priv->tx[ring].bytes_done;
 			} while (u64_stats_fetch_retry(&priv->tx[ring].statss,
 						       start));
+			s->tx_packets += packets;
+			s->tx_bytes += bytes;
 		}
 	}
 }
@@ -82,6 +87,9 @@ static int gve_alloc_counter_array(struct gve_priv *priv)
 
 static void gve_free_counter_array(struct gve_priv *priv)
 {
+	if (!priv->counter_array)
+		return;
+
 	dma_free_coherent(&priv->pdev->dev,
 			  priv->num_event_counters *
 			  sizeof(*priv->counter_array),
@@ -142,6 +150,9 @@ static int gve_alloc_stats_report(struct gve_priv *priv)
 
 static void gve_free_stats_report(struct gve_priv *priv)
 {
+	if (!priv->stats_report)
+		return;
+
 	del_timer_sync(&priv->stats_report_timer);
 	dma_free_coherent(&priv->pdev->dev, priv->stats_report_len,
 			  priv->stats_report, priv->stats_report_bus);
@@ -181,34 +192,40 @@ static int gve_napi_poll(struct napi_struct *napi, int budget)
 	__be32 __iomem *irq_doorbell;
 	bool reschedule = false;
 	struct gve_priv *priv;
+	int work_done = 0;
 
 	block = container_of(napi, struct gve_notify_block, napi);
 	priv = block->priv;
 
 	if (block->tx)
 		reschedule |= gve_tx_poll(block, budget);
-	if (block->rx)
-		reschedule |= gve_rx_poll(block, budget);
+	if (block->rx) {
+		work_done = gve_rx_poll(block, budget);
+		reschedule |= work_done == budget;
+	}
 
 	if (reschedule)
 		return budget;
 
-	napi_complete(napi);
-	irq_doorbell = gve_irq_doorbell(priv, block);
-	iowrite32be(GVE_IRQ_ACK | GVE_IRQ_EVENT, irq_doorbell);
+       /* Complete processing - don't unmask irq if busy polling is enabled */
+	if (likely(napi_complete_done(napi, work_done))) {
+		irq_doorbell = gve_irq_doorbell(priv, block);
+		iowrite32be(GVE_IRQ_ACK | GVE_IRQ_EVENT, irq_doorbell);
 
-	/* Double check we have no extra work.
-	 * Ensure unmask synchronizes with checking for work.
-	 */
-	mb();
-	if (block->tx)
-		reschedule |= gve_tx_poll(block, -1);
-	if (block->rx)
-		reschedule |= gve_rx_poll(block, -1);
-	if (reschedule && napi_reschedule(napi))
-		iowrite32be(GVE_IRQ_MASK, irq_doorbell);
+		/* Ensure IRQ ACK is visible before we check pending work.
+		 * If queue had issued updates, it would be truly visible.
+		 */
+		mb();
 
-	return 0;
+		if (block->tx)
+			reschedule |= gve_tx_clean_pending(priv, block->tx);
+		if (block->rx)
+			reschedule |= gve_rx_work_pending(block->rx);
+
+		if (reschedule && napi_reschedule(napi))
+			iowrite32be(GVE_IRQ_MASK, irq_doorbell);
+	}
+	return work_done;
 }
 
 static int gve_napi_poll_dqo(struct napi_struct *napi, int budget)
@@ -268,7 +285,7 @@ static int gve_alloc_notify_blocks(struct gve_priv *priv)
 	int i, j;
 	int err;
 
-	priv->msix_vectors = kvzalloc(num_vecs_requested *
+	priv->msix_vectors = kvcalloc(num_vecs_requested,
 				      sizeof(*priv->msix_vectors), GFP_KERNEL);
 	if (!priv->msix_vectors)
 		return -ENOMEM;
@@ -314,15 +331,23 @@ static int gve_alloc_notify_blocks(struct gve_priv *priv)
 		dev_err(&priv->pdev->dev, "Did not receive management vector.\n");
 		goto abort_with_msix_enabled;
 	}
-	priv->ntfy_blocks =
+	priv->irq_db_indices =
 		dma_alloc_coherent(&priv->pdev->dev,
 				   priv->num_ntfy_blks *
-				   sizeof(*priv->ntfy_blocks),
-				   &priv->ntfy_block_bus, GFP_KERNEL);
-	if (!priv->ntfy_blocks) {
+				   sizeof(*priv->irq_db_indices),
+				   &priv->irq_db_indices_bus, GFP_KERNEL);
+	if (!priv->irq_db_indices) {
 		err = -ENOMEM;
 		goto abort_with_mgmt_vector;
 	}
+
+	priv->ntfy_blocks = kvzalloc(priv->num_ntfy_blks *
+				     sizeof(*priv->ntfy_blocks), GFP_KERNEL);
+	if (!priv->ntfy_blocks) {
+		err = -ENOMEM;
+		goto abort_with_irq_db_indices;
+	}
+
 	/* Setup the other blocks - the first n-1 vectors */
 	for (i = 0; i < priv->num_ntfy_blks; i++) {
 		struct gve_notify_block *block = &priv->ntfy_blocks[i];
@@ -341,6 +366,7 @@ static int gve_alloc_notify_blocks(struct gve_priv *priv)
 		}
 		irq_set_affinity_hint(priv->msix_vectors[msix_idx].vector,
 				      get_cpu_mask(i % active_cpus));
+		block->irq_db_index = &priv->irq_db_indices[i].index;
 	}
 	return 0;
 abort_with_some_ntfy_blocks:
@@ -352,10 +378,13 @@ abort_with_some_ntfy_blocks:
 				      NULL);
 		free_irq(priv->msix_vectors[msix_idx].vector, block);
 	}
-	dma_free_coherent(&priv->pdev->dev, priv->num_ntfy_blks *
-			  sizeof(*priv->ntfy_blocks),
-			  priv->ntfy_blocks, priv->ntfy_block_bus);
+	kvfree(priv->ntfy_blocks);
 	priv->ntfy_blocks = NULL;
+abort_with_irq_db_indices:
+	dma_free_coherent(&priv->pdev->dev, priv->num_ntfy_blks *
+			  sizeof(*priv->irq_db_indices),
+			  priv->irq_db_indices, priv->irq_db_indices_bus);
+	priv->irq_db_indices = NULL;
 abort_with_mgmt_vector:
 	free_irq(priv->msix_vectors[priv->mgmt_msix_idx].vector, priv);
 abort_with_msix_enabled:
@@ -370,22 +399,25 @@ static void gve_free_notify_blocks(struct gve_priv *priv)
 {
 	int i;
 
-	if (priv->msix_vectors) {
-		/* Free the irqs */
-		for (i = 0; i < priv->num_ntfy_blks; i++) {
-			struct gve_notify_block *block = &priv->ntfy_blocks[i];
-			int msix_idx = i;
+	if (!priv->msix_vectors)
+		return;
 
-			irq_set_affinity_hint(priv->msix_vectors[msix_idx].vector,
-					      NULL);
-			free_irq(priv->msix_vectors[msix_idx].vector, block);
-		}
-		free_irq(priv->msix_vectors[priv->mgmt_msix_idx].vector, priv);
+	/* Free the irqs */
+	for (i = 0; i < priv->num_ntfy_blks; i++) {
+		struct gve_notify_block *block = &priv->ntfy_blocks[i];
+		int msix_idx = i;
+
+		irq_set_affinity_hint(priv->msix_vectors[msix_idx].vector,
+				      NULL);
+		free_irq(priv->msix_vectors[msix_idx].vector, block);
 	}
-	dma_free_coherent(&priv->pdev->dev,
-			  priv->num_ntfy_blks * sizeof(*priv->ntfy_blocks),
-			  priv->ntfy_blocks, priv->ntfy_block_bus);
+	free_irq(priv->msix_vectors[priv->mgmt_msix_idx].vector, priv);
+	kvfree(priv->ntfy_blocks);
 	priv->ntfy_blocks = NULL;
+	dma_free_coherent(&priv->pdev->dev, priv->num_ntfy_blks *
+			  sizeof(*priv->irq_db_indices),
+			  priv->irq_db_indices, priv->irq_db_indices_bus);
+	priv->irq_db_indices = NULL;
 	pci_disable_msix(priv->pdev);
 	kvfree(priv->msix_vectors);
 	priv->msix_vectors = NULL;
@@ -407,7 +439,7 @@ static int gve_setup_device_resources(struct gve_priv *priv)
 	err = gve_adminq_configure_device_resources(priv,
 						    priv->counter_array_bus,
 						    priv->num_event_counters,
-						    priv->ntfy_block_bus,
+						    priv->irq_db_indices_bus,
 						    priv->num_ntfy_blks);
 	if (unlikely(err)) {
 		dev_err(&priv->pdev->dev,
@@ -628,7 +660,7 @@ static int gve_alloc_rings(struct gve_priv *priv)
 	int err;
 
 	/* Setup tx rings */
-	priv->tx = kvzalloc(priv->tx_cfg.num_queues * sizeof(*priv->tx),
+	priv->tx = kvcalloc(priv->tx_cfg.num_queues, sizeof(*priv->tx),
 			    GFP_KERNEL);
 	if (!priv->tx)
 		return -ENOMEM;
@@ -641,7 +673,7 @@ static int gve_alloc_rings(struct gve_priv *priv)
 		goto free_tx;
 
 	/* Setup rx rings */
-	priv->rx = kvzalloc(priv->rx_cfg.num_queues * sizeof(*priv->rx),
+	priv->rx = kvcalloc(priv->rx_cfg.num_queues, sizeof(*priv->rx),
 			    GFP_KERNEL);
 	if (!priv->rx) {
 		err = -ENOMEM;
@@ -731,9 +763,9 @@ static void gve_free_rings(struct gve_priv *priv)
 
 int gve_alloc_page(struct gve_priv *priv, struct device *dev,
 		   struct page **page, dma_addr_t *dma,
-		   enum dma_data_direction dir)
+		   enum dma_data_direction dir, gfp_t gfp_flags)
 {
-	*page = alloc_page(GFP_KERNEL);
+	*page = alloc_page(gfp_flags);
 	if (!*page) {
 		priv->page_alloc_fail++;
 		return -ENOMEM;
@@ -764,12 +796,11 @@ static int gve_alloc_queue_page_list(struct gve_priv *priv, u32 id,
 
 	qpl->id = id;
 	qpl->num_entries = 0;
-	qpl->pages = kvzalloc(pages * sizeof(*qpl->pages), GFP_KERNEL);
+	qpl->pages = kvcalloc(pages, sizeof(*qpl->pages), GFP_KERNEL);
 	/* caller handles clean up */
 	if (!qpl->pages)
 		return -ENOMEM;
-	qpl->page_buses = kvzalloc(pages * sizeof(*qpl->page_buses),
-				   GFP_KERNEL);
+	qpl->page_buses = kvcalloc(pages, sizeof(*qpl->page_buses), GFP_KERNEL);
 	/* caller handles clean up */
 	if (!qpl->page_buses)
 		return -ENOMEM;
@@ -777,7 +808,7 @@ static int gve_alloc_queue_page_list(struct gve_priv *priv, u32 id,
 	for (i = 0; i < pages; i++) {
 		err = gve_alloc_page(priv, &priv->pdev->dev, &qpl->pages[i],
 				     &qpl->page_buses[i],
-				     gve_qpl_dma_dir(priv, id));
+				     gve_qpl_dma_dir(priv, id), GFP_KERNEL);
 		/* caller handles clean up */
 		if (err)
 			return -ENOMEM;
@@ -797,8 +828,7 @@ void gve_free_page(struct device *dev, struct page *page, dma_addr_t dma,
 		put_page(page);
 }
 
-static void gve_free_queue_page_list(struct gve_priv *priv,
-				     int id)
+static void gve_free_queue_page_list(struct gve_priv *priv, u32 id)
 {
 	struct gve_queue_page_list *qpl = &priv->qpls[id];
 	int i;
@@ -828,7 +858,7 @@ static int gve_alloc_qpls(struct gve_priv *priv)
 	if (priv->queue_format == GVE_GQI_RDA_FORMAT)
 		return 0;
 
-	priv->qpls = kvzalloc(num_qpls * sizeof(*priv->qpls), GFP_KERNEL);
+	priv->qpls = kvcalloc(num_qpls, sizeof(*priv->qpls), GFP_KERNEL);
 	if (!priv->qpls)
 		return -ENOMEM;
 
@@ -847,7 +877,7 @@ static int gve_alloc_qpls(struct gve_priv *priv)
 
 	priv->qpl_cfg.qpl_map_size = BITS_TO_LONGS(num_qpls) *
 				     sizeof(unsigned long) * BITS_PER_BYTE;
-	priv->qpl_cfg.qpl_id_map = kvzalloc(BITS_TO_LONGS(num_qpls) *
+	priv->qpl_cfg.qpl_id_map = kvcalloc(BITS_TO_LONGS(num_qpls),
 					    sizeof(unsigned long), GFP_KERNEL);
 	if (!priv->qpl_cfg.qpl_id_map) {
 		err = -ENOMEM;
@@ -1185,9 +1215,10 @@ static void gve_handle_reset(struct gve_priv *priv)
 
 void gve_handle_report_stats(struct gve_priv *priv)
 {
-	int idx, stats_idx = 0, tx_bytes;
-	unsigned int start = 0;
 	struct stats *stats = priv->stats_report->stats;
+	int idx, stats_idx = 0;
+	unsigned int start = 0;
+	u64 tx_bytes;
 
 	if (!gve_get_report_stats(priv))
 		return;
@@ -1306,14 +1337,6 @@ static int gve_init_priv(struct gve_priv *priv, bool skip_describe_device)
 		dev_err(&priv->pdev->dev,
 			"Could not get device information: err=%d\n", err);
 		goto err;
-	}
-	if (gve_is_gqi(priv) && priv->dev->max_mtu > PAGE_SIZE) {
-		priv->dev->max_mtu = PAGE_SIZE;
-		err = gve_adminq_set_mtu(priv, priv->dev->mtu);
-		if (err) {
-			dev_err(&priv->pdev->dev, "Could not set mtu");
-			goto err;
-		}
 	}
 	priv->dev->mtu = priv->dev->max_mtu;
 	num_ntfy = pci_msix_vec_count(priv->pdev);
@@ -1607,6 +1630,58 @@ static void gve_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 }
 
+static void gve_shutdown(struct pci_dev *pdev)
+{
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct gve_priv *priv = netdev_priv(netdev);
+	bool was_up = netif_carrier_ok(priv->dev);
+
+	rtnl_lock();
+	if (was_up && gve_close(priv->dev)) {
+		/* If the dev was up, attempt to close, if close fails, reset */
+		gve_reset_and_teardown(priv, was_up);
+	} else {
+		/* If the dev wasn't up or close worked, finish tearing down */
+		gve_teardown_priv_resources(priv);
+	}
+	rtnl_unlock();
+}
+
+#ifdef CONFIG_PM
+static int gve_suspend(struct pci_dev *pdev, pm_message_t state)
+{
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct gve_priv *priv = netdev_priv(netdev);
+	bool was_up = netif_carrier_ok(priv->dev);
+
+	priv->suspend_cnt++;
+	rtnl_lock();
+	if (was_up && gve_close(priv->dev)) {
+		/* If the dev was up, attempt to close, if close fails, reset */
+		gve_reset_and_teardown(priv, was_up);
+	} else {
+		/* If the dev wasn't up or close worked, finish tearing down */
+		gve_teardown_priv_resources(priv);
+	}
+	priv->up_before_suspend = was_up;
+	rtnl_unlock();
+	return 0;
+}
+
+static int gve_resume(struct pci_dev *pdev)
+{
+	struct net_device *netdev = pci_get_drvdata(pdev);
+	struct gve_priv *priv = netdev_priv(netdev);
+	int err;
+
+	priv->resume_cnt++;
+	rtnl_lock();
+	err = gve_reset_recovery(priv, priv->up_before_suspend);
+	rtnl_unlock();
+	return err;
+}
+#endif /* CONFIG_PM */
+
 static const struct pci_device_id gve_id_table[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_GOOGLE, PCI_DEV_ID_GVNIC) },
 	{ }
@@ -1617,6 +1692,11 @@ static struct pci_driver gvnic_driver = {
 	.id_table	= gve_id_table,
 	.probe		= gve_probe,
 	.remove		= gve_remove,
+	.shutdown	= gve_shutdown,
+#ifdef CONFIG_PM
+	.suspend        = gve_suspend,
+	.resume         = gve_resume,
+#endif
 };
 
 module_pci_driver(gvnic_driver);
