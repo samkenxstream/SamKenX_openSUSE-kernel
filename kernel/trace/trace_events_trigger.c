@@ -929,6 +929,16 @@ void set_named_trigger_data(struct event_trigger_data *data,
 static void
 traceon_trigger(struct event_trigger_data *data, void *rec)
 {
+	struct trace_event_file *file = data->private_data;
+
+	if (file) {
+		if (tracer_tracing_is_on(file->tr))
+			return;
+
+		tracer_tracing_on(file->tr);
+		return;
+	}
+
 	if (tracing_is_on())
 		return;
 
@@ -938,8 +948,15 @@ traceon_trigger(struct event_trigger_data *data, void *rec)
 static void
 traceon_count_trigger(struct event_trigger_data *data, void *rec)
 {
-	if (tracing_is_on())
-		return;
+	struct trace_event_file *file = data->private_data;
+
+	if (file) {
+		if (tracer_tracing_is_on(file->tr))
+			return;
+	} else {
+		if (tracing_is_on())
+			return;
+	}
 
 	if (!data->count)
 		return;
@@ -947,12 +964,25 @@ traceon_count_trigger(struct event_trigger_data *data, void *rec)
 	if (data->count != -1)
 		(data->count)--;
 
-	tracing_on();
+	if (file)
+		tracer_tracing_on(file->tr);
+	else
+		tracing_on();
 }
 
 static void
 traceoff_trigger(struct event_trigger_data *data, void *rec)
 {
+	struct trace_event_file *file = data->private_data;
+
+	if (file) {
+		if (!tracer_tracing_is_on(file->tr))
+			return;
+
+		tracer_tracing_off(file->tr);
+		return;
+	}
+
 	if (!tracing_is_on())
 		return;
 
@@ -962,8 +992,15 @@ traceoff_trigger(struct event_trigger_data *data, void *rec)
 static void
 traceoff_count_trigger(struct event_trigger_data *data, void *rec)
 {
-	if (!tracing_is_on())
-		return;
+	struct trace_event_file *file = data->private_data;
+
+	if (file) {
+		if (!tracer_tracing_is_on(file->tr))
+			return;
+	} else {
+		if (!tracing_is_on())
+			return;
+	}
 
 	if (!data->count)
 		return;
@@ -971,7 +1008,10 @@ traceoff_count_trigger(struct event_trigger_data *data, void *rec)
 	if (data->count != -1)
 		(data->count)--;
 
-	tracing_off();
+	if (file)
+		tracer_tracing_off(file->tr);
+	else
+		tracing_off();
 }
 
 static int
@@ -1162,7 +1202,17 @@ static __init int register_trigger_snapshot_cmd(void) { return 0; }
 static void
 stacktrace_trigger(struct event_trigger_data *data, void *rec)
 {
-	trace_dump_stack(STACK_SKIP);
+	struct trace_event_file *file = data->private_data;
+	unsigned long flags;
+	int pc;
+
+	if (file) {
+		local_save_flags(flags);
+		pc = preempt_count();
+		__trace_stack(file->tr, flags, STACK_SKIP, pc);
+	} else {
+		trace_dump_stack(STACK_SKIP);
+	}
 }
 
 static void
