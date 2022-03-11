@@ -486,34 +486,63 @@ replay:
 
 	/* Find head of filter chain. */
 
+	rcu_read_lock();
+
 	/* Find link */
-	dev = __dev_get_by_index(net, t->tcm_ifindex);
-	if (dev == NULL)
+	dev = dev_get_by_index_rcu(net, t->tcm_ifindex);
+	if (dev == NULL) {
+		rcu_read_unlock();
 		return -ENODEV;
+	}
 
 	/* Find qdisc */
 	if (!parent) {
 		q = dev->qdisc;
 		parent = q->handle;
 	} else {
-		q = qdisc_lookup(dev, TC_H_MAJ(t->tcm_parent));
-		if (q == NULL)
-			return -EINVAL;
+		q = qdisc_lookup_rcu(dev, TC_H_MAJ(t->tcm_parent));
+		if (q == NULL) {
+			err = -EINVAL;
+			rcu_read_unlock();
+			goto errout;
+		}
+	}
+
+	q = qdisc_refcount_inc_nz(q);
+	if (!q) {
+		err = -EINVAL;
+		rcu_read_unlock();
+		goto errout;
 	}
 
 	/* Is it classful? */
 	cops = q->ops->cl_ops;
-	if (!cops)
-		return -EINVAL;
+	if (!cops) {
+		err = -EINVAL;
+		rcu_read_unlock();
+		goto errout;
+	}
 
-	if (!cops->tcf_block)
-		return -EOPNOTSUPP;
+	if (!cops->tcf_block) {
+		err = -EOPNOTSUPP;
+		rcu_read_unlock();
+		goto errout;
+	}
+
+	/* At this point we know that qdisc is not noop_qdisc,
+	 * which means that qdisc holds a reference to net_device
+	 * and we hold a reference to qdisc, so it is safe to release
+	 * rcu read lock.
+	 */
+	rcu_read_unlock();
 
 	/* Do we search for filter, attached to class? */
 	if (TC_H_MIN(parent)) {
 		cl = cops->get(q, parent);
-		if (cl == 0)
-			return -ENOENT;
+		if (cl == 0) {
+			err = -ENOENT;
+			goto errout;
+		}
 	}
 
 	/* And the last stroke */
@@ -643,6 +672,8 @@ replay:
 	}
 
 errout:
+	if (q)
+		qdisc_put(q);
 	if (chain)
 		tcf_chain_put(chain);
 	if (cl)
