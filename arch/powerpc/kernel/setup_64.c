@@ -601,6 +601,8 @@ void __init irqstack_early_init(void)
 	u64 limit = ppc64_bolted_size();
 	unsigned int i;
 
+	BUILD_BUG_ON(STACK_INT_FRAME_SIZE % 16);
+
 	/*
 	 * Interrupt stacks must be in the first segment since we
 	 * cannot afford to take SLB misses on them. They are not
