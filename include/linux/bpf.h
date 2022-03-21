@@ -1049,6 +1049,11 @@ int btf_check_func_arg_match(struct bpf_verifier_env *env, int subprog);
 
 struct bpf_prog *bpf_prog_by_id(u32 id);
 
+static inline bool unprivileged_ebpf_enabled(void)
+{
+	return !sysctl_unprivileged_bpf_disabled;
+}
+
 #else /* !CONFIG_BPF_SYSCALL */
 static inline struct bpf_prog *bpf_prog_get(u32 ufd)
 {
@@ -1184,6 +1189,11 @@ static inline void bpf_map_put(struct bpf_map *map)
 static inline struct bpf_prog *bpf_prog_by_id(u32 id)
 {
 	return ERR_PTR(-ENOTSUPP);
+}
+
+static inline bool unprivileged_ebpf_enabled(void)
+{
+	return false;
 }
 #endif /* CONFIG_BPF_SYSCALL */
 
