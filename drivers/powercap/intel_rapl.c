@@ -35,6 +35,9 @@
 #include <asm/cpu_device_id.h>
 #include <asm/intel-family.h>
 
+/* Not backported to intel-family.h */
+#define INTEL_FAM6_SAPPHIRERAPIDS_X 0x8F
+
 /* Local defines */
 #define MSR_PLATFORM_POWER_LIMIT	0x0000065C
 
@@ -209,6 +212,7 @@ struct rapl_defaults {
 	u64 (*compute_time_window)(struct rapl_package *rp, u64 val,
 				bool to_raw);
 	unsigned int dram_domain_energy_unit;
+	unsigned int psys_domain_energy_unit;
 };
 static struct rapl_defaults *rapl_defaults;
 
@@ -1134,6 +1138,14 @@ static const struct rapl_defaults rapl_defaults_cht = {
 	.compute_time_window = rapl_compute_time_window_atom,
 };
 
+static const struct rapl_defaults rapl_defaults_spr_server = {
+	.check_unit = rapl_check_unit_core,
+	.set_floor_freq = set_floor_freq_default,
+	.compute_time_window = rapl_compute_time_window_core,
+	.dram_domain_energy_unit = 15300,
+	.psys_domain_energy_unit = 1000000000,
+};
+
 #define RAPL_CPU(_model, _ops) {			\
 		.vendor = X86_VENDOR_INTEL,		\
 		.family = 6,				\
@@ -1179,6 +1191,8 @@ static const struct x86_cpu_id rapl_ids[] __initconst = {
 
 	X86_MATCH_INTEL_FAM6_MODEL(XEON_PHI_KNL,	&rapl_defaults_hsw_server),
 	X86_MATCH_INTEL_FAM6_MODEL(XEON_PHI_KNM,	&rapl_defaults_hsw_server),
+
+	X86_MATCH_INTEL_FAM6_MODEL(SAPPHIRERAPIDS_X,	&rapl_defaults_spr_server),
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, rapl_ids);
@@ -1306,7 +1320,11 @@ static int __init rapl_register_psys(void)
 	rd->rpl[1].prim_id = PL2_ENABLE;
 	rd->rpl[1].name = pl2_name;
 	rd->rp = rapl_find_package_domain(0);
-
+	rd->domain_energy_unit =
+		rapl_defaults->psys_domain_energy_unit;
+	if (rd->domain_energy_unit)
+		pr_info("Platform domain energy unit %dpj\n",
+			rd->domain_energy_unit);
 	power_zone = powercap_register_zone(&rd->power_zone, control_type,
 					    "psys", NULL,
 					    &zone_ops[RAPL_DOMAIN_PLATFORM],
