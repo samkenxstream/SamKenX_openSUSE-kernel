@@ -3673,8 +3673,6 @@ static int ena_restore_device(struct ena_adapter *adapter)
 		"Device reset completed successfully, Driver info: %s\n",
 		version);
 
-	dev_err(&pdev->dev, "Device reset completed successfully\n");
-
 	return rc;
 err_disable_msix:
 	ena_free_mgmnt_irq(adapter);
@@ -3704,6 +3702,8 @@ static void ena_fw_reset_device(struct work_struct *work)
 	if (likely(test_bit(ENA_FLAG_TRIGGER_RESET, &adapter->flags))) {
 		ena_destroy_device(adapter, false);
 		ena_restore_device(adapter);
+
+		dev_err(&adapter->pdev->dev, "Device reset completed successfully\n");
 	}
 
 	rtnl_unlock();
