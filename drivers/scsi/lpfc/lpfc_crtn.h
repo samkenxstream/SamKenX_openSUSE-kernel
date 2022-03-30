@@ -212,7 +212,7 @@ int lpfc_sli4_refresh_params(struct lpfc_hba *phba);
 int lpfc_hba_down_prep(struct lpfc_hba *);
 int lpfc_hba_down_post(struct lpfc_hba *);
 void lpfc_hba_init(struct lpfc_hba *, uint32_t *);
-int lpfc_post_buffer(struct lpfc_hba *, struct lpfc_sli_ring *, int);
+int lpfc_sli3_post_buffer(struct lpfc_hba *phba, struct lpfc_sli_ring *pring, int cnt);
 void lpfc_decode_firmware_rev(struct lpfc_hba *, char *, int);
 int lpfc_online(struct lpfc_hba *);
 void lpfc_unblock_mgmt_io(struct lpfc_hba *);
@@ -607,7 +607,7 @@ void lpfc_nvmet_unsol_fcp_event(struct lpfc_hba *phba, uint32_t idx,
 void lpfc_nvme_mod_param_dep(struct lpfc_hba *phba);
 void lpfc_nvme_abort_fcreq_cmpl(struct lpfc_hba *phba,
 				struct lpfc_iocbq *cmdiocb,
-				struct lpfc_wcqe_complete *abts_cmpl);
+			        struct lpfc_iocbq *rspwqe);
 void lpfc_create_multixri_pools(struct lpfc_hba *phba);
 void lpfc_create_destroy_pools(struct lpfc_hba *phba);
 void lpfc_move_xri_pvt_to_pbl(struct lpfc_hba *phba, u32 hwqid);
