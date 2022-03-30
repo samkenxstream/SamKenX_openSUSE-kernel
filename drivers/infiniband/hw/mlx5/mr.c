@@ -85,33 +85,6 @@ static bool use_umr_mtt_update(struct mlx5_ib_mr *mr, u64 start, u64 length)
 		length + (start & (MLX5_ADAPTER_PAGE_SIZE - 1));
 }
 
-#ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-static void update_odp_mr(struct mlx5_ib_mr *mr)
-{
-	if (mr->umem->is_odp) {
-		/*
-		 * This barrier prevents the compiler from moving the
-		 * setting of umem->odp_data->private to point to our
-		 * MR, before reg_umr finished, to ensure that the MR
-		 * initialization have finished before starting to
-		 * handle invalidations.
-		 */
-		smp_wmb();
-		to_ib_umem_odp(mr->umem)->private = mr;
-		/*
-		 * Make sure we will see the new
-		 * umem->odp_data->private value in the invalidation
-		 * routines, before we can get page faults on the
-		 * MR. Page faults can happen once we put the MR in
-		 * the tree, below this line. Without the barrier,
-		 * there can be a fault handling and an invalidation
-		 * before umem->odp_data->private == mr is visible to
-		 * the invalidation handler.
-		 */
-		smp_wmb();
-	}
-}
-#endif
 
 static void reg_mr_callback(int status, void *context)
 {
@@ -1363,10 +1336,6 @@ struct ib_mr *mlx5_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 	mr->umem = umem;
 	set_mr_fields(dev, mr, npages, length, access_flags);
 
-#ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-	update_odp_mr(mr);
-#endif
-
 	if (use_umr) {
 		int update_xlt_flags = MLX5_IB_UPD_XLT_ENABLE;
 
@@ -1382,8 +1351,11 @@ struct ib_mr *mlx5_ib_reg_user_mr(struct ib_pd *pd, u64 start, u64 length,
 		}
 	}
 
+	if (mr->umem->is_odp) {
+		to_ib_umem_odp(mr->umem)->private = mr;
+	}
 #ifdef CONFIG_INFINIBAND_ON_DEMAND_PAGING
-	mr->live = 1;
+	smp_store_release(&mr->live, 1);
 #endif
 	return &mr->ibmr;
 error:
@@ -1623,7 +1595,8 @@ static void dereg_mr(struct mlx5_ib_dev *dev, struct mlx5_ib_mr *mr)
 		struct ib_umem_odp *umem_odp = to_ib_umem_odp(umem);
 
 		/* Prevent new page faults from succeeding */
-		mr->live = 0;
+		WRITE_ONCE(mr->live, 0);
+
 		/* Wait for all running page-fault handlers to finish. */
 		synchronize_srcu(&dev->mr_srcu);
 		/* Destroy all page mappings */
