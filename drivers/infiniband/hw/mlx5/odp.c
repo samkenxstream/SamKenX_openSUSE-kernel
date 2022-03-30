@@ -270,7 +270,6 @@ void mlx5_ib_invalidate_range(struct ib_umem_odp *umem_odp, unsigned long start,
 				   idx - blk_start_idx + 1, 0,
 				   MLX5_IB_UPD_XLT_ZAP |
 				   MLX5_IB_UPD_XLT_ATOMIC);
-	mutex_unlock(&umem_odp->umem_mutex);
 	/*
 	 * We are now sure that the device will not access the
 	 * memory. We can safely unmap it, and mark it as dirty if
@@ -281,10 +280,11 @@ void mlx5_ib_invalidate_range(struct ib_umem_odp *umem_odp, unsigned long start,
 
 	if (unlikely(!umem->npages && mr->parent &&
 		     !umem_odp->dying)) {
-		WRITE_ONCE(umem_odp->dying, 1);
+		umem_odp->dying = 1;
 		atomic_inc(&mr->parent->num_leaf_free);
 		schedule_work(&umem_odp->work);
 	}
+	mutex_unlock(&umem_odp->umem_mutex);
 }
 
 void mlx5_ib_internal_fill_odp_caps(struct mlx5_ib_dev *dev)
@@ -509,15 +509,19 @@ static int mr_leaf_free(struct ib_umem_odp *umem_odp, u64 start, u64 end,
 	if (mr->parent != imr)
 		return 0;
 
+	mutex_lock(&umem_odp->umem_mutex);
 	ib_umem_odp_unmap_dma_pages(umem_odp, ib_umem_start(umem),
 				    ib_umem_end(umem));
 
-	if (umem_odp->dying)
+	if (umem_odp->dying){
+		mutex_unlock(&umem_odp->umem_mutex);
 		return 0;
+	}
 
-	WRITE_ONCE(umem_odp->dying, 1);
+	umem_odp->dying = 1;
 	atomic_inc(&imr->num_leaf_free);
 	schedule_work(&umem_odp->work);
+	mutex_unlock(&umem_odp->umem_mutex);
 
 	return 0;
 }
