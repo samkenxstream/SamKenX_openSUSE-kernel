@@ -369,6 +369,7 @@ int nf_conntrack_sctp_packet(struct nf_conn *ct,
 	u_int32_t offset, count;
 	unsigned int *timeouts;
 	unsigned long map[256 / sizeof(unsigned long)] = { 0 };
+	bool ignore = false;
 
 	if (sctp_error(skb, dataoff, state))
 		return -NF_ACCEPT;
@@ -462,6 +463,15 @@ int nf_conntrack_sctp_packet(struct nf_conn *ct,
 			pr_debug("Setting vtag %x for dir %d\n",
 				 ih->init_tag, !dir);
 			ct->proto.sctp.vtag[!dir] = ih->init_tag;
+
+			/* don't renew timeout on init retransmit so
+			 * port reuse by client or NAT middlebox cannot
+			 * keep entry alive indefinitely (incl. nat info).
+			 */
+			if (new_state == SCTP_CONNTRACK_CLOSED &&
+			    old_state == SCTP_CONNTRACK_CLOSED &&
+			    nf_ct_is_confirmed(ct))
+				ignore = true;
 		}
 
 		ct->proto.sctp.state = new_state;
@@ -469,6 +479,10 @@ int nf_conntrack_sctp_packet(struct nf_conn *ct,
 			nf_conntrack_event_cache(IPCT_PROTOINFO, ct);
 	}
 	spin_unlock_bh(&ct->lock);
+
+	/* allow but do not refresh timeout */
+	if (ignore)
+		return NF_ACCEPT;
 
 	timeouts = nf_ct_timeout_lookup(ct);
 	if (!timeouts)
