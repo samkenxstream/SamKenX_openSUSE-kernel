@@ -161,9 +161,7 @@ err1:
 static enum rdma_link_layer rxe_get_link_layer(struct ib_device *dev,
 					       u8 port_num)
 {
-	struct rxe_dev *rxe = to_rdev(dev);
-
-	return rxe_link_layer(rxe, port_num);
+	return IB_LINK_LAYER_ETHERNET;
 }
 
 static struct ib_ucontext *rxe_alloc_ucontext(struct ib_device *dev,

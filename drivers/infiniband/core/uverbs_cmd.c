@@ -3134,6 +3134,7 @@ int ib_uverbs_ex_create_wq(struct ib_uverbs_file *file,
 		wq_init_attr.create_flags = cmd.create_flags;
 	obj->uevent.events_reported = 0;
 	INIT_LIST_HEAD(&obj->uevent.event_list);
+	obj->uevent.uobject.user_handle = cmd.user_handle;
 
 	if (!pd->device->create_wq) {
 		err = -EOPNOTSUPP;
@@ -3155,8 +3156,6 @@ int ib_uverbs_ex_create_wq(struct ib_uverbs_file *file,
 	atomic_set(&wq->usecnt, 0);
 	atomic_inc(&pd->usecnt);
 	atomic_inc(&cq->usecnt);
-	wq->uobject = &obj->uevent.uobject;
-	obj->uevent.uobject.object = wq;
 
 	memset(&resp, 0, sizeof(resp));
 	resp.wq_handle = obj->uevent.uobject.id;

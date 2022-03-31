@@ -191,7 +191,7 @@ static void mr_leaf_free_action(struct work_struct *work)
 	mr->parent = NULL;
 	synchronize_srcu(&mr->dev->mr_srcu);
 
-	if (imr->live) {
+	if (smp_load_acquire(&imr->live)) {
 		srcu_key = srcu_read_lock(&mr->dev->mr_srcu);
 		mutex_lock(&odp_imr->umem_mutex);
 		mlx5_ib_update_xlt(imr, idx, 1, 0,
@@ -270,7 +270,6 @@ void mlx5_ib_invalidate_range(struct ib_umem_odp *umem_odp, unsigned long start,
 				   idx - blk_start_idx + 1, 0,
 				   MLX5_IB_UPD_XLT_ZAP |
 				   MLX5_IB_UPD_XLT_ATOMIC);
-	mutex_unlock(&umem_odp->umem_mutex);
 	/*
 	 * We are now sure that the device will not access the
 	 * memory. We can safely unmap it, and mark it as dirty if
@@ -281,10 +280,12 @@ void mlx5_ib_invalidate_range(struct ib_umem_odp *umem_odp, unsigned long start,
 
 	if (unlikely(!umem->npages && mr->parent &&
 		     !umem_odp->dying)) {
-		WRITE_ONCE(umem_odp->dying, 1);
+		WRITE_ONCE(mr->live, 0);
+		umem_odp->dying = 1;
 		atomic_inc(&mr->parent->num_leaf_free);
 		schedule_work(&umem_odp->work);
 	}
+	mutex_unlock(&umem_odp->umem_mutex);
 }
 
 void mlx5_ib_internal_fill_odp_caps(struct mlx5_ib_dev *dev)
@@ -389,8 +390,6 @@ static struct mlx5_ib_mr *implicit_mr_alloc(struct ib_pd *pd,
 	mr->ibmr.lkey = mr->mmkey.key;
 	mr->ibmr.rkey = mr->mmkey.key;
 
-	mr->live = 1;
-
 	mlx5_ib_dbg(dev, "key %x dev %p mr %p\n",
 		    mr->mmkey.key, dev->mdev, mr);
 
@@ -445,6 +444,8 @@ next_mr:
 		mtt->parent = mr;
 		INIT_WORK(&odp->work, mr_leaf_free_action);
 
+		smp_store_release(&mtt->live, 1);
+
 		if (!nentries)
 			start_idx = addr >> MLX5_IMR_MTT_SHIFT;
 		nentries++;
@@ -496,6 +497,7 @@ struct mlx5_ib_mr *mlx5_ib_alloc_implicit_mr(struct mlx5_ib_pd *pd,
 	imr->umem = umem;
 	init_waitqueue_head(&imr->q_leaf_free);
 	atomic_set(&imr->num_leaf_free, 0);
+	smp_store_release(&imr->live, 1);
 
 	return imr;
 }
@@ -509,15 +511,19 @@ static int mr_leaf_free(struct ib_umem_odp *umem_odp, u64 start, u64 end,
 	if (mr->parent != imr)
 		return 0;
 
+	mutex_lock(&umem_odp->umem_mutex);
 	ib_umem_odp_unmap_dma_pages(umem_odp, ib_umem_start(umem),
 				    ib_umem_end(umem));
 
-	if (umem_odp->dying)
+	if (umem_odp->dying){
+		mutex_unlock(&umem_odp->umem_mutex);
 		return 0;
+	}
 
-	WRITE_ONCE(umem_odp->dying, 1);
+	umem_odp->dying = 1;
 	atomic_inc(&imr->num_leaf_free);
 	schedule_work(&umem_odp->work);
+	mutex_unlock(&umem_odp->umem_mutex);
 
 	return 0;
 }
@@ -702,7 +708,7 @@ next_mr:
 	switch (mmkey->type) {
 	case MLX5_MKEY_MR:
 		mr = container_of(mmkey, struct mlx5_ib_mr, mmkey);
-		if (!mr->live || !mr->ibmr.pd) {
+		if (!smp_load_acquire(&mr->live) || !mr->ibmr.pd) {
 			mlx5_ib_dbg(dev, "got dead MR\n");
 			ret = -EFAULT;
 			goto srcu_unlock;
