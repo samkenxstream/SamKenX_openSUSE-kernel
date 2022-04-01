@@ -4268,7 +4268,8 @@ int __pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
 #endif /* __PAGETABLE_PMD_FOLDED */
 
 static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
-		pte_t **ptepp, pmd_t **pmdpp, spinlock_t **ptlp)
+			    unsigned long *start, unsigned long *end,
+			    pte_t **ptepp, pmd_t **pmdpp, spinlock_t **ptlp)
 {
 	pgd_t *pgd;
 	p4d_t *p4d;
@@ -4295,26 +4296,38 @@ static int __follow_pte_pmd(struct mm_struct *mm, unsigned long address,
 		if (!pmdpp)
 			goto out;
 
+		if (start && end) {
+			*start = address & PMD_MASK;
+			*end = *start + PMD_SIZE;
+			mmu_notifier_invalidate_range_start(mm, *start, *end);
+		}
 		*ptlp = pmd_lock(mm, pmd);
 		if (pmd_huge(*pmd)) {
 			*pmdpp = pmd;
 			return 0;
 		}
 		spin_unlock(*ptlp);
+		if (start && end)
+			mmu_notifier_invalidate_range_end(mm, *start, *end);
 	}
 
 	if (pmd_none(*pmd) || unlikely(pmd_bad(*pmd)))
 		goto out;
 
+	if (start && end) {
+		*start = address & PAGE_MASK;
+		*end = *start + PAGE_SIZE;
+		mmu_notifier_invalidate_range_start(mm, *start, *end);
+	}
 	ptep = pte_offset_map_lock(mm, pmd, address, ptlp);
-	if (!ptep)
-		goto out;
 	if (!pte_present(*ptep))
 		goto unlock;
 	*ptepp = ptep;
 	return 0;
 unlock:
 	pte_unmap_unlock(ptep, *ptlp);
+	if (start && end)
+		mmu_notifier_invalidate_range_end(mm, *start, *end);
 out:
 	return -EINVAL;
 }
@@ -4326,8 +4339,8 @@ static inline int follow_pte(struct mm_struct *mm, unsigned long address,
 
 	/* (void) is needed to make gcc happy */
 	(void) __cond_lock(*ptlp,
-			   !(res = __follow_pte_pmd(mm, address, ptepp, NULL,
-					   ptlp)));
+			   !(res = __follow_pte_pmd(mm, address, NULL, NULL,
+						    ptepp, NULL, ptlp)));
 	return res;
 }
 
@@ -4338,11 +4351,25 @@ int follow_pte_pmd(struct mm_struct *mm, unsigned long address,
 
 	/* (void) is needed to make gcc happy */
 	(void) __cond_lock(*ptlp,
-			   !(res = __follow_pte_pmd(mm, address, ptepp, pmdpp,
-					   ptlp)));
+			   !(res = __follow_pte_pmd(mm, address, NULL, NULL,
+						    ptepp, pmdpp, ptlp)));
 	return res;
 }
 EXPORT_SYMBOL(follow_pte_pmd);
+
+int follow_pte_pmd_invalidate(struct mm_struct *mm, unsigned long address,
+			     unsigned long *start, unsigned long *end,
+			     pte_t **ptepp, pmd_t **pmdpp, spinlock_t **ptlp)
+{
+	int res;
+
+	/* (void) is needed to make gcc happy */
+	(void) __cond_lock(*ptlp,
+			   !(res = __follow_pte_pmd(mm, address, start, end,
+						    ptepp, pmdpp, ptlp)));
+	return res;
+}
+EXPORT_SYMBOL(follow_pte_pmd_invalidate);
 
 /**
  * follow_pfn - look up PFN at a user virtual address
