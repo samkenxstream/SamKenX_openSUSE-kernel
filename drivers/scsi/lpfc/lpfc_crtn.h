@@ -657,3 +657,6 @@ extern int lpfc_use_cgn_signal;
 extern union lpfc_wqe128 lpfc_iread_cmd_template;
 extern union lpfc_wqe128 lpfc_iwrite_cmd_template;
 extern union lpfc_wqe128 lpfc_icmnd_cmd_template;
+
+void lpfc_sli_rpi_release(struct lpfc_vport *vport,
+			  struct lpfc_nodelist *ndlp);
