@@ -387,6 +387,11 @@ static ssize_t ib_umad_read(struct file *filp, char __user *buf,
 		mutex_lock(&file->mutex);
 	}
 
+	if (file->agents_dead) {
+		mutex_unlock(&file->mutex);
+		return -EIO;
+	}
+
 	packet = list_entry(file->recv_list.next, struct ib_umad_packet, list);
 	list_del(&packet->list);
 
@@ -645,10 +650,14 @@ static unsigned int ib_umad_poll(struct file *filp, struct poll_table_struct *wa
 	/* we will always be able to post a MAD send */
 	unsigned int mask = POLLOUT | POLLWRNORM;
 
+	mutex_lock(&file->mutex);
 	poll_wait(filp, &file->recv_wait, wait);
 
 	if (!list_empty(&file->recv_list))
 		mask |= POLLIN | POLLRDNORM;
+	if (file->agents_dead)
+		mask = POLLERR;
+	mutex_unlock(&file->mutex);
 
 	return mask;
 }
@@ -1263,6 +1272,7 @@ static void ib_umad_kill_port(struct ib_umad_port *port)
 	list_for_each_entry(file, &port->file_list, port_list) {
 		mutex_lock(&file->mutex);
 		file->agents_dead = 1;
+		wake_up_interruptible(&file->recv_wait);
 		mutex_unlock(&file->mutex);
 
 		for (id = 0; id < IB_UMAD_MAX_AGENTS; ++id)
