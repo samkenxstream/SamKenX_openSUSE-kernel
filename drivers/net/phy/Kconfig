@@ -139,6 +139,7 @@ config MDIO_THUNDER
 	depends on PCI
 	depends on !(MDIO_DEVICE=y && PHYLIB=m)
 	select MDIO_CAVIUM
+	select MDIO_DEVRES
 	help
 	  This driver supports the MDIO interfaces found on Cavium
 	  ThunderX SoCs when the MDIO bus device appears as a PCI
