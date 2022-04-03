@@ -330,6 +330,9 @@ static void rxe_rcv_mcast_pkt(struct rxe_dev *rxe, struct sk_buff *skb)
 			skb = NULL;
 		}
 
+		if (unlikely(!per_qp_skb))
+			continue;
+
 		per_qp_pkt = SKB_TO_PKT(per_qp_skb);
 		per_qp_pkt->qp = qp;
 		rxe_add_ref(qp);
