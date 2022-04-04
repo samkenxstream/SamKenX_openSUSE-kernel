@@ -129,7 +129,7 @@ nft_do_chain(struct nft_pktinfo *pkt, void *priv)
 	struct nft_stats __percpu *pstats;
 	const struct nft_rule *rule;
 	const struct nft_expr *expr, *last;
-	struct nft_regs regs;
+	struct nft_regs regs = {};
 	unsigned int stackptr = 0;
 	struct nft_jumpstack jumpstack[NFT_JUMP_STACK_SIZE];
 	struct nft_stats *stats;
