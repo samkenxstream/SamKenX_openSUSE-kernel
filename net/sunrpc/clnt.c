@@ -999,11 +999,10 @@ out:
 }
 EXPORT_SYMBOL_GPL(rpc_bind_new_program);
 
-static struct rpc_xprt *
-rpc_task_get_xprt(struct rpc_clnt *clnt)
+struct rpc_xprt *
+rpc_task_get_xprt(struct rpc_clnt *clnt, struct rpc_xprt *xprt)
 {
 	struct rpc_xprt_switch *xps;
-	struct rpc_xprt *xprt= xprt_iter_get_next(&clnt->cl_xpi);
 
 	if (!xprt)
 		return NULL;
@@ -1069,7 +1068,13 @@ rpc_task_get_first_xprt(struct rpc_clnt *clnt)
 	xprt = xprt_get(rcu_dereference(clnt->cl_xprt));
 	rcu_read_unlock();
 
-	return xprt;
+	return rpc_task_get_xprt(clnt, xprt);
+}
+
+static struct rpc_xprt *
+rpc_task_get_next_xprt(struct rpc_clnt *clnt)
+{
+	return rpc_task_get_xprt(clnt, xprt_iter_get_next(&clnt->cl_xpi));
 }
 
 static
@@ -1080,7 +1085,7 @@ void rpc_task_set_transport(struct rpc_task *task, struct rpc_clnt *clnt)
 	if (task->tk_flags & RPC_TASK_NO_ROUND_ROBIN)
 		task->tk_xprt = rpc_task_get_first_xprt(clnt);
 	else
-		task->tk_xprt = rpc_task_get_xprt(clnt);
+		task->tk_xprt = rpc_task_get_next_xprt(clnt);
 }
 
 static

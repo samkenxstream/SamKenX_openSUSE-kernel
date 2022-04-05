@@ -78,6 +78,7 @@ static struct nfs_open_dir_context *alloc_nfs_open_dir_context(struct inode *dir
 		ctx->dir_cookie = 0;
 		ctx->dup_cookie = 0;
 		ctx->cred = get_rpccred(cred);
+		ctx->eof = 0;
 		spin_lock(&dir->i_lock);
 		list_add(&ctx->list, &nfsi->open_files);
 		spin_unlock(&dir->i_lock);
@@ -166,6 +167,7 @@ typedef struct {
 	unsigned long	gencount;
 	unsigned int	cache_entry_index;
 	unsigned int	plus:1;
+	unsigned int	eob:1;
 	unsigned int	eof:1;
 } nfs_readdir_descriptor_t;
 
@@ -801,7 +803,7 @@ int nfs_do_filldir(nfs_readdir_descriptor_t *desc)
 		ent = &array->array[i];
 		if (!dir_emit(desc->ctx, ent->string.name, ent->string.len,
 		    nfs_compat_user_ino64(ent->ino), ent->d_type)) {
-			desc->eof = 1;
+			desc->eob = 1;
 			break;
 		}
 		desc->ctx->pos++;
@@ -813,7 +815,7 @@ int nfs_do_filldir(nfs_readdir_descriptor_t *desc)
 			ctx->duped = 1;
 	}
 	if (array->eof_index >= 0)
-		desc->eof = 1;
+		desc->eof = !desc->eob;
 
 	kunmap(desc->page);
 	dfprintk(DIRCACHE, "NFS: nfs_do_filldir() filling ended @ cookie %Lu; returning = %d\n",
@@ -851,6 +853,7 @@ int uncached_readdir(nfs_readdir_descriptor_t *desc)
 	}
 
 	desc->page_index = 0;
+	desc->cache_entry_index = 0;
 	desc->last_cookie = *desc->dir_cookie;
 	desc->page = page;
 	ctx->duped = 0;
@@ -898,8 +901,14 @@ static int nfs_readdir(struct file *file, struct dir_context *ctx)
 	desc->file = file;
 	desc->ctx = ctx;
 	desc->dir_cookie = &dir_ctx->dir_cookie;
+	desc->eof = dir_ctx->eof;
 	desc->decode = NFS_PROTO(inode)->decode_dirent;
 	desc->plus = nfs_use_readdirplus(inode, ctx) ? 1 : 0;
+
+	if (desc->eof) {
+		res = 0;
+		goto out;
+	}
 
 	if (ctx->pos == 0 || nfs_attribute_cache_expired(inode))
 		res = nfs_revalidate_mapping(inode, file->f_mapping);
@@ -936,8 +945,9 @@ static int nfs_readdir(struct file *file, struct dir_context *ctx)
 		cache_page_release(desc);
 		if (res < 0)
 			break;
-	} while (!desc->eof);
+	} while (!desc->eob && !desc->eof);
 out:
+	dir_ctx->eof = desc->eof;
 	if (res > 0)
 		res = 0;
 	dfprintk(FILE, "NFS: readdir(%pD2) returns %d\n", file, res);
@@ -967,6 +977,7 @@ static loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence)
 		filp->f_pos = offset;
 		dir_ctx->dir_cookie = 0;
 		dir_ctx->duped = 0;
+		dir_ctx->eof = false;
 	}
 out:
 	inode_unlock(inode);

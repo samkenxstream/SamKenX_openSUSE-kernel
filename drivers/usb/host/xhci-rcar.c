@@ -122,6 +122,12 @@ static int xhci_rcar_download_firmware(struct usb_hcd *hcd)
 	int retval, index, j, time;
 	int timeout = 10000;
 	u32 data, val, temp;
+	/*
+	 * According to the datasheet, "Upon the completion of FW Download,
+	 * there is no need to write or reload FW".
+	 */
+	if (readl(regs + RCAR_USB3_DL_CTRL) & RCAR_USB3_DL_CTRL_FW_SUCCESS)
+		return 0;
 
 	/* request R-Car USB3.0 firmware */
 	retval = request_firmware(&fw, priv->firmware_name, dev);

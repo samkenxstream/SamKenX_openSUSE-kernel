@@ -455,8 +455,10 @@ void ib_umem_odp_release(struct ib_umem_odp *umem_odp)
 	 * It is the driver's responsibility to ensure, before calling us,
 	 * that the hardware will not attempt to access the MR any more.
 	 */
+	mutex_lock(&umem_odp->umem_mutex);
 	ib_umem_odp_unmap_dma_pages(umem_odp, ib_umem_start(umem),
 				    ib_umem_end(umem));
+	mutex_unlock(&umem_odp->umem_mutex);
 
 	remove_umem_from_per_mm(umem_odp);
 	put_per_mm(umem_odp);
@@ -621,7 +623,7 @@ int ib_umem_odp_map_dma_pages(struct ib_umem_odp *umem_odp, u64 user_virt,
 
 	while (bcnt > 0) {
 		const size_t gup_num_pages = min_t(size_t,
-				(bcnt + BIT(page_shift) - 1) >> page_shift,
+				ALIGN(bcnt, PAGE_SIZE) / PAGE_SIZE,
 				PAGE_SIZE / sizeof(struct page *));
 
 		down_read(&owning_mm->mmap_sem);
@@ -706,6 +708,8 @@ void ib_umem_odp_unmap_dma_pages(struct ib_umem_odp *umem_odp, u64 virt,
 	u64 addr;
 	struct ib_device *dev = umem->context->device;
 
+	lockdep_assert_held(&umem_odp->umem_mutex);
+
 	virt  = max_t(u64, virt,  ib_umem_start(umem));
 	bound = min_t(u64, bound, ib_umem_end(umem));
 	/* Note that during the run of this function, the
@@ -713,7 +717,6 @@ void ib_umem_odp_unmap_dma_pages(struct ib_umem_odp *umem_odp, u64 virt,
 	 * faults from completion. We might be racing with other
 	 * invalidations, so we must make sure we free each page only
 	 * once. */
-	mutex_lock(&umem_odp->umem_mutex);
 	for (addr = virt; addr < bound; addr += BIT(umem->page_shift)) {
 		idx = (addr - ib_umem_start(umem)) >> umem->page_shift;
 		if (umem_odp->page_list[idx]) {
@@ -746,6 +749,5 @@ void ib_umem_odp_unmap_dma_pages(struct ib_umem_odp *umem_odp, u64 virt,
 			umem->npages--;
 		}
 	}
-	mutex_unlock(&umem_odp->umem_mutex);
 }
 EXPORT_SYMBOL(ib_umem_odp_unmap_dma_pages);
