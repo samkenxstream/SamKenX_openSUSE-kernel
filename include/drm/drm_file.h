@@ -231,9 +231,6 @@ struct drm_file {
 	 */
 	struct drm_master *master;
 
-	/** @master_lock: Serializes @master. */
-	spinlock_t master_lookup_lock;
-
 	/** @pid: Process that opened this file. */
 	struct pid *pid;
 
@@ -347,6 +344,10 @@ struct drm_file {
 
 	/* private: */
 	unsigned long lock_count; /* DRI1 legacy lock count */
+#ifndef __GENKSYMS__
+	/** @master_lock: Serializes @master. */
+	spinlock_t master_lookup_lock;
+#endif
 };
 
 /**
