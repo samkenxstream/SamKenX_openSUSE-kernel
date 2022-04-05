@@ -233,7 +233,6 @@ struct bnxt_qplib_rcfw {
 	struct tasklet_struct	worker;
 	bool			requested;
 	unsigned long		*cmdq_bitmap;
-	u32			bmap_size;
 	unsigned long		flags;
 #define FIRMWARE_INITIALIZED_FLAG	0
 #define FIRMWARE_FIRST_FLAG		31

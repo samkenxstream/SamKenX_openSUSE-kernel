@@ -323,6 +323,7 @@ static enum resp_states get_srq_wqe(struct rxe_qp *qp)
 	struct rxe_queue *q = srq->rq.queue;
 	struct rxe_recv_wqe *wqe;
 	struct ib_event ev;
+	size_t size;
 
 	if (srq->error)
 		return RESPST_ERR_RNR;
@@ -335,8 +336,13 @@ static enum resp_states get_srq_wqe(struct rxe_qp *qp)
 		return RESPST_ERR_RNR;
 	}
 
-	/* note kernel and user space recv wqes have same size */
-	memcpy(&qp->resp.srq_wqe, wqe, sizeof(qp->resp.srq_wqe));
+	/* don't trust user space data */
+	if (unlikely(wqe->dma.num_sge > srq->rq.max_sge)) {
+		pr_warn("%s: invalid num_sge in SRQ entry\n", __func__);
+		return RESPST_ERR_MALFORMED_WQE;
+	}
+	size = sizeof(wqe) + wqe->dma.num_sge*sizeof(struct rxe_sge);
+	memcpy(&qp->resp.srq_wqe, wqe, size);
 
 	qp->resp.wqe = &qp->resp.srq_wqe.wqe;
 	advance_consumer(q);
@@ -618,17 +624,10 @@ static struct sk_buff *prepare_ack_packet(struct rxe_qp *qp,
 	ack->mask = rxe_opcode[opcode].mask;
 	ack->offset = pkt->offset;
 	ack->paylen = paylen;
-
-	/* fill in bth using the request packet headers */
-	memcpy(ack->hdr, pkt->hdr, pkt->offset + RXE_BTH_BYTES);
-
-	bth_set_opcode(ack, opcode);
-	bth_set_qpn(ack, qp->attr.dest_qp_num);
-	bth_set_pad(ack, pad);
-	bth_set_se(ack, 0);
-	bth_set_psn(ack, psn);
-	bth_set_ack(ack, 0);
 	ack->psn = psn;
+
+	bth_init(ack, opcode, 0, 0, pad, IB_DEFAULT_PKEY_FULL,
+		 qp->attr.dest_qp_num, 0, psn);
 
 	if (ack->mask & RXE_AETH_MASK) {
 		aeth_set_syn(ack, syndrome);
