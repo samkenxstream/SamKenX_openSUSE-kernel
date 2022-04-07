@@ -672,12 +672,12 @@ replay:
 	}
 
 errout:
-	if (q)
-		qdisc_put(q);
 	if (chain)
 		tcf_chain_put(chain);
 	if (cl)
 		cops->put(q, cl);
+	if (q)
+		qdisc_put(q);
 	if (err == -EAGAIN)
 		/* Replay the request. */
 		goto replay;
