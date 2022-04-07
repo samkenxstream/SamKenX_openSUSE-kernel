@@ -650,12 +650,11 @@ void bnxt_qplib_disable_rcfw_channel(struct bnxt_qplib_rcfw *rcfw)
 	iounmap(rcfw->cmdq_bar_reg_iomem);
 	iounmap(rcfw->creq_bar_reg_iomem);
 
-	indx = find_first_bit(rcfw->cmdq_bitmap, rcfw->bmap_size);
-	if (indx != rcfw->bmap_size)
+	indx = find_first_bit(rcfw->cmdq_bitmap, rcfw->cmdq_depth);
+	if (indx != rcfw->cmdq_depth)
 		dev_err(&rcfw->pdev->dev,
 			"disabling RCFW with pending cmd-bit %lx\n", indx);
 	kfree(rcfw->cmdq_bitmap);
-	rcfw->bmap_size = 0;
 
 	rcfw->cmdq_bar_reg_iomem = NULL;
 	rcfw->creq_bar_reg_iomem = NULL;
@@ -709,7 +708,6 @@ int bnxt_qplib_enable_rcfw_channel(struct pci_dev *pdev,
 	rcfw->cmdq_bitmap = kzalloc(bmap_size, GFP_KERNEL);
 	if (!rcfw->cmdq_bitmap)
 		return -ENOMEM;
-	rcfw->bmap_size = bmap_size;
 
 	/* CMDQ */
 	rcfw->cmdq_bar_reg = RCFW_COMM_PCI_BAR_REGION;
