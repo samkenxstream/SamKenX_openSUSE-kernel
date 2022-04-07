@@ -243,7 +243,8 @@ void arm64_skip_faulting_instruction(struct pt_regs *regs, unsigned long size)
 	 * If we were single stepping, we want to get the step exception after
 	 * we return from the trap.
 	 */
-	user_fastforward_single_step(current);
+	if (user_mode(regs))
+		user_fastforward_single_step(current);
 }
 
 static LIST_HEAD(undef_hook);
@@ -746,7 +747,6 @@ asmlinkage void bad_mode(struct pt_regs *regs, int reason, unsigned int esr)
 		handler[reason], smp_processor_id(), esr,
 		esr_get_class_string(esr));
 
-	die("Oops - bad mode", regs, 0);
 	local_daif_mask();
 	panic("bad mode");
 }

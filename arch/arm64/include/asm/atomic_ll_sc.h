@@ -267,7 +267,7 @@ __LL_SC_PREFIX(__cmpxchg_case_##name(volatile void *ptr,		\
 	"2:"								\
 	: [tmp] "=&r" (tmp), [oldval] "=&r" (oldval),			\
 	  [v] "+Q" (*(unsigned long *)ptr)				\
-	: [old] "Lr" (old), [new] "r" (new)				\
+	: [old] "Kr" (old), [new] "r" (new)				\
 	: cl);								\
 									\
 	return oldval;							\
