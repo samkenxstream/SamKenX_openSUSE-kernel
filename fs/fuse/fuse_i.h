@@ -312,7 +312,9 @@ struct fuse_req {
 	/** refcount */
 	refcount_t count;
 
+#ifndef __GENKSYMS__
 	bool user_pages;
+#endif
 
 	/** Unique ID for the interrupt request */
 	u64 intr_unique;
