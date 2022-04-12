@@ -209,6 +209,8 @@ extern void set_iounmap_nonlazy(void);
  */
 #define xlate_dev_kmem_ptr(p)	p
 
+static inline bool sev_key_active(void);
+
 /**
  * memset_io	Set a range of I/O memory to a constant value
  * @addr:	The beginning of the I/O-memory range to set
@@ -218,9 +220,23 @@ extern void set_iounmap_nonlazy(void);
  * Set a range of I/O memory to a given value.
  */
 static inline void
+unrolled_memset_io(volatile void __iomem *addr, int val, size_t count)
+{
+	volatile char __iomem *mem = addr;
+	int i;
+
+	for (i = 0; i < count; ++i)
+		writeb(val, &mem[i]);
+}
+
+static inline void
 memset_io(volatile void __iomem *addr, unsigned char val, size_t count)
 {
-	memset((void __force *)addr, val, count);
+	if (sev_key_active()) {
+		unrolled_memset_io(addr, val, count);
+	} else {
+		memset((void __force *)addr, val, count);
+	}
 }
 
 /**
@@ -232,9 +248,29 @@ memset_io(volatile void __iomem *addr, unsigned char val, size_t count)
  * Copy a block of data from I/O memory.
  */
 static inline void
-memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
+unrolled_memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
+{
+	const volatile char __iomem *in = src;
+	char *out = dst;
+	int i;
+
+	for (i = 0; i < count; ++i)
+		out[i] = readb(&in[i]);
+}
+
+static inline void
+string_memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
 {
 	memcpy(dst, (const void __force *)src, count);
+}
+
+static inline void
+memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
+{
+	if (sev_key_active())
+		unrolled_memcpy_fromio(dst, src, count);
+	else
+		string_memcpy_fromio(dst, src, count);
 }
 
 /**
@@ -246,9 +282,29 @@ memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
  * Copy a block of data to I/O memory.
  */
 static inline void
-memcpy_toio(volatile void __iomem *dst, const void *src, size_t count)
+unrolled_memcpy_toio(volatile void __iomem *dst, const void *src, size_t count)
+{
+	volatile char __iomem *out = dst;
+	const char *in = src;
+	int i;
+
+	for (i = 0; i < count; ++i)
+		writeb(in[i], &out[i]);
+}
+
+static inline void
+string_memcpy_toio(volatile void __iomem *dst, const void *src, size_t count)
 {
 	memcpy((void __force *)dst, src, count);
+}
+
+static inline void
+memcpy_toio(volatile void __iomem *dst, const void *src, size_t count)
+{
+	if (sev_key_active())
+		unrolled_memcpy_toio(dst, src, count);
+	else
+		string_memcpy_toio(dst, src, count);
 }
 
 /*
