@@ -1416,7 +1416,7 @@ static int __parse_cls_flower(struct mlx5e_priv *priv,
 	      BIT(FLOW_DISSECTOR_KEY_IP)  |
 	      BIT(FLOW_DISSECTOR_KEY_ENC_IP))) {
 		NL_SET_ERR_MSG_MOD(extack, "Unsupported key");
-		netdev_warn(priv->netdev, "Unsupported key used: 0x%x\n",
+		netdev_dbg(priv->netdev, "Unsupported key used: 0x%x\n",
 			    f->dissector->used_keys);
 		return -EOPNOTSUPP;
 	}
