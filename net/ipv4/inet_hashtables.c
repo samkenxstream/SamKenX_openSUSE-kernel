@@ -478,7 +478,13 @@ bool inet_ehash_insert(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	return ret;
 }
 
-bool inet_ehash_nolisten(struct sock *sk, struct sock *osk, bool *found_dup_sk)
+bool inet_ehash_nolisten(struct sock *sk, struct sock *osk)
+{
+	return inet_ehash_nolisten3(sk, osk, NULL);
+}
+EXPORT_SYMBOL_GPL(inet_ehash_nolisten);
+
+bool inet_ehash_nolisten3(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 {
 	bool ok = inet_ehash_insert(sk, osk, found_dup_sk);
 
@@ -492,7 +498,6 @@ bool inet_ehash_nolisten(struct sock *sk, struct sock *osk, bool *found_dup_sk)
 	}
 	return ok;
 }
-EXPORT_SYMBOL_GPL(inet_ehash_nolisten);
 
 static int inet_reuseport_add_sock(struct sock *sk,
 				   struct inet_listen_hashbucket *ilb)
@@ -522,7 +527,7 @@ int __inet_hash(struct sock *sk, struct sock *osk)
 	int err = 0;
 
 	if (sk->sk_state != TCP_LISTEN) {
-		inet_ehash_nolisten(sk, osk, NULL);
+		inet_ehash_nolisten(sk, osk);
 		return 0;
 	}
 	WARN_ON(!sk_unhashed(sk));
@@ -623,7 +628,7 @@ int __inet_hash_connect(struct inet_timewait_death_row *death_row,
 		tb = inet_csk(sk)->icsk_bind_hash;
 		spin_lock_bh(&head->lock);
 		if (sk_head(&tb->owners) == sk && !sk->sk_bind_node.next) {
-			inet_ehash_nolisten(sk, NULL, NULL);
+			inet_ehash_nolisten(sk, NULL);
 			spin_unlock_bh(&head->lock);
 			return 0;
 		}
@@ -707,7 +712,7 @@ ok:
 	inet_bind_hash(sk, tb, port);
 	if (sk_unhashed(sk)) {
 		inet_sk(sk)->inet_sport = htons(port);
-		inet_ehash_nolisten(sk, (struct sock *)tw, NULL);
+		inet_ehash_nolisten(sk, (struct sock *)tw);
 	}
 	if (tw)
 		inet_twsk_bind_unhash(tw, hinfo);

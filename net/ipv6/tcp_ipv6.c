@@ -1211,8 +1211,8 @@ static struct sock *tcp_v6_syn_recv_sock(const struct sock *sk, struct sk_buff *
 		tcp_done(newsk);
 		goto out;
 	}
-	*own_req = inet_ehash_nolisten(newsk, req_to_sk(req_unhash),
-				       &found_dup_sk);
+	*own_req = inet_ehash_nolisten3(newsk, req_to_sk(req_unhash),
+				        &found_dup_sk);
 	if (*own_req) {
 		tcp_move_syn(newtp, req);
 
