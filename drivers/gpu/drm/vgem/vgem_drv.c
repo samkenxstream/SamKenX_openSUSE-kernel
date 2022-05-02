@@ -218,7 +218,7 @@ static int vgem_gem_dumb_create(struct drm_file *file, struct drm_device *dev,
 
 	drm_gem_object_put_unlocked(gem_object);
 
-	DRM_DEBUG("Created object of size %llu\n", args->size);
+	DRM_DEBUG_DRIVER("Created object of size %llu\n", args->size);
 
 	return 0;
 }
