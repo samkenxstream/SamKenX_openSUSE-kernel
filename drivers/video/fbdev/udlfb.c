@@ -1593,6 +1593,7 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 	struct usb_device *usbdev;
 	struct dlfb_data *dev;
 	int retval = -ENOMEM;
+	struct usb_endpoint_descriptor *out;
 
 	/* usb initialization */
 
@@ -1610,6 +1611,12 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 	dev->gdev = &usbdev->dev; /* our generic struct device * */
 	usb_set_intfdata(interface, dev);
 
+	retval = usb_find_common_endpoints(intf->cur_altsetting, NULL, &out, NULL, NULL);
+	if (retval) {
+		dev_err(&intf->dev, "Device should have at lease 1 bulk endpoint!\n");
+		goto error;
+	}
+
 	pr_info("%s %s - serial #%s\n",
 		usbdev->manufacturer, usbdev->product, usbdev->serial);
 	pr_info("vid_%04x&pid_%04x&rev_%04x driver's dlfb_data struct at %p\n",
@@ -1624,6 +1631,7 @@ static int dlfb_usb_probe(struct usb_interface *interface,
 
 	if (!dlfb_parse_vendor_descriptor(dev, interface)) {
 		pr_err("firmware not recognized. Assume incompatible device\n");
+		retval = -ENODEV;
 		goto error;
 	}
 
