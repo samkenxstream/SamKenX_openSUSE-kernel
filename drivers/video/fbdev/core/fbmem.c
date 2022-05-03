@@ -954,6 +954,7 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 {
 	int flags = info->flags;
 	int ret = 0;
+	u32 unused;
 
 	if (var->activate & FB_ACTIVATE_INV_MODE) {
 		struct fb_videomode mode1, mode2;
@@ -1004,6 +1005,11 @@ fb_set_var(struct fb_info *info, struct fb_var_screeninfo *var)
 
 		/* bitfill_aligned() assumes that it's at least 8x8 */
 		if (var->xres < 8 || var->yres < 8)
+			return -EINVAL;
+
+		/* Too huge resolution causes multiplication overflow. */
+		if (check_mul_overflow(var->xres, var->yres, &unused) ||
+		    check_mul_overflow(var->xres_virtual, var->yres_virtual, &unused))
 			return -EINVAL;
 
 		ret = info->fbops->fb_check_var(var, info);
@@ -1895,6 +1901,7 @@ EXPORT_SYMBOL(unregister_framebuffer);
 void fb_set_suspend(struct fb_info *info, int state)
 {
 	struct fb_event event;
+	u32 unused;
 
 	event.info = info;
 	if (state) {

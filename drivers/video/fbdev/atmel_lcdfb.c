@@ -1211,6 +1211,7 @@ static int __init atmel_lcdfb_probe(struct platform_device *pdev)
 		goto free_info;
 	}
 
+	ret = -ENODEV;
 	if (!sinfo->config)
 		goto free_info;
 
