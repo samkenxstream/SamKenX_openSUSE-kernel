@@ -2874,6 +2874,7 @@ irqreturn_t xhci_irq(struct usb_hcd *hcd)
 	}
 
 	xhci_update_erst_dequeue(xhci, event_ring_deq);
+	event_ring_deq = xhci->event_ring->dequeue;
 	ret = IRQ_HANDLED;
 
 out:
