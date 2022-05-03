@@ -2245,7 +2245,10 @@ call_status(struct rpc_task *task)
 		task->tk_action = call_bind;
 		break;
 	case -ENOBUFS:
+	case -ENFILE:
+	case -ENOMEM:
 		rpc_delay(task, HZ>>2);
+		break;
 	case -EAGAIN:
 		task->tk_action = call_transmit;
 		break;
