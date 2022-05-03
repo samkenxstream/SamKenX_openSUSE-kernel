@@ -3083,6 +3083,7 @@ int drm_fb_helper_generic_probe(struct drm_fb_helper *fb_helper,
 	fbi->fix.smem_len = fbi->screen_size;
 	fbi->screen_buffer = buffer->vaddr;
 	strcpy(fbi->fix.id, "DRM emulated");
+	fbi->flags = FBINFO_DEFAULT;
 
 	drm_fb_helper_fill_fix(fbi, fb->pitches[0], fb->format->depth);
 	drm_fb_helper_fill_var(fbi, fb_helper, sizes->fb_width, sizes->fb_height);
@@ -3106,6 +3107,7 @@ int drm_fb_helper_generic_probe(struct drm_fb_helper *fb_helper,
 		*fbops = *fbi->fbops;
 		fbi->fbops = fbops;
 		fbi->screen_buffer = shadow;
+		fbi->flags |= FBINFO_VIRTFB | FBINFO_READS_FAST;
 		fbi->fbdefio = &drm_fbdev_defio;
 
 		fb_deferred_io_init(fbi);
