@@ -384,6 +384,8 @@ struct ixgbevf_adapter {
 	u32 *rss_key;
 	u8 rss_indir_tbl[IXGBEVF_X550_VFRETA_SIZE];
 	u32 flags;
+	bool link_state;
+
 #define IXGBEVF_FLAGS_LEGACY_RX		BIT(1)
 };
 
