@@ -106,6 +106,8 @@ enum ixgbe_pfvf_api_rev {
 
 #define IXGBE_VF_UPDATE_XCAST_MODE	0x0c
 
+#define IXGBE_VF_GET_LINK_STATE	0x10 /* get vf link state */
+
 /* mailbox API, version 1.4 VF requests */
 #define IXGBE_VF_IPSEC_ADD	0x0d
 #define IXGBE_VF_IPSEC_DEL	0x0e
